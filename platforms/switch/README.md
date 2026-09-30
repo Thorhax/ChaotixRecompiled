@@ -4,9 +4,9 @@ This folder contains platform assets and documentation for the Nintendo Switch h
 
 ---
 
-## 🎮 Installation & Playing
+## 🎮 Installation & Setup
 
-1. Copy `ChaotixRecompiled.nro` (found in `dist/` or `build_switch/`) to your Switch SD card:
+1. Copy `ChaotixRecompiled.nro` to your Switch SD card:
    ```
    sdmc:/switch/ChaotixRecompiled.nro
    ```
@@ -14,11 +14,14 @@ This folder contains platform assets and documentation for the Nintendo Switch h
    ```
    sdmc:/switch/chaotix/ChaotixRecompiled.nro
    ```
-2. Launch the Homebrew Menu via the Album applet or title override (Atmosphère), and select **Knuckles' Chaotix Recompiled**.
 
-### ROM Handling
-- **Embedded RomFS:** The default `.nro` binary is built with the verified ROM embedded inside `romfs:/rom.bin`, enabling instant, standalone plug-and-play without extra setup.
-- **Custom / SD Card ROMs:** You can also place `rom.bin` (or any compatible 32X Chaotix ROM) in `sdmc:/switch/chaotix/`. If present, the port scans and loads from the SD card.
+2. Place your Knuckles' Chaotix 32X ROM (`chaotix.32x` or `rom.bin`) on your SD card inside:
+   ```
+   sdmc:/switch/chaotix/Game/chaotix.32x
+   ```
+   *(Alternatively, `sdmc:/switch/chaotix/` or `sdmc:/switch/chaotix/rom/`)*
+
+3. Launch the Homebrew Menu via title override (Atmosphère), and select **Knuckles' Chaotix Recompiled**.
 
 ---
 
