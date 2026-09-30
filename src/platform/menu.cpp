@@ -429,7 +429,11 @@ bool Menu::on_key(SDL_Keycode key) {
         // simply the wrong kind of answer and is ignored.
         if (key == SDLK_ESCAPE) awaiting_.clear();
         else if (!keys_pad_ && cfg_) {
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+            const SDL_Scancode sc = SDL_GetScancodeFromKey(key);
+#else
             const SDL_Scancode sc = SDL_GetScancodeFromKey(key, nullptr);
+#endif
             const char* name = SDL_GetScancodeName(sc);
             if (name && *name) {
                 auto& binds = keys_player_ == 0 ? cfg_->keys : cfg_->keys2;

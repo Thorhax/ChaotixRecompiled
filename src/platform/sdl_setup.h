@@ -5,9 +5,10 @@
 #include <string>
 #include <vector>
 
+#include "platform/sdl_compat.h"
+
 struct SDL_Window;
 struct SDL_Renderer;
-struct SDL_IOStream;
 
 namespace chaotix {
 

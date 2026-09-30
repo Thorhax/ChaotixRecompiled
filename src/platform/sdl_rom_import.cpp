@@ -1,6 +1,5 @@
 #include "platform/sdl_setup.h"
 #include "frontend/setup.h"
-#include <SDL3/SDL.h>
 #include <filesystem>
 #include <memory>
 
@@ -38,6 +37,7 @@ bool install_rom_from_stream(SDL_IOStream* source, const std::string& store_root
     size_t total = 0;
     for (;;) {
         const size_t n = SDL_ReadIO(input.get(), buffer, sizeof buffer);
+#if !defined(CHAOTIX_USE_SDL2) && !defined(__SWITCH__)
         const SDL_IOStatus status = SDL_GetIOStatus(input.get());
         if (status == SDL_IO_STATUS_ERROR || status == SDL_IO_STATUS_NOT_READY)
             return fail(std::string("cannot read ROM: ") + SDL_GetError());
@@ -45,6 +45,9 @@ bool install_rom_from_stream(SDL_IOStream* source, const std::string& store_root
             if (status != SDL_IO_STATUS_EOF) return fail("cannot read ROM: incomplete stream");
             break;
         }
+#else
+        if (!n) break;
+#endif
         if (n > max_size - total) return fail("unexpected ROM size");
         if (SDL_WriteIO(output.get(), buffer, n) != n)
             return fail(std::string("cannot write ROM import: ") + SDL_GetError());

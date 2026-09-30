@@ -93,29 +93,38 @@ if(CHAOTIX_GENERATED_SOURCES)
 endif()
 
 # Headless runner: deterministic frame execution, screenshots, validation.
-add_executable(chaotix_headless src/frontend/headless_main.cpp)
-target_link_libraries(chaotix_headless PRIVATE chaotix_game)
-chaotix_set_warnings(chaotix_headless)
+if(NOT CMAKE_CROSSCOMPILING)
+    add_executable(chaotix_headless src/frontend/headless_main.cpp)
+    target_link_libraries(chaotix_headless PRIVATE chaotix_game)
+    chaotix_set_warnings(chaotix_headless)
+endif()
 
 # ---------------------------------------------------------------------------
-# SDL3 frontend (desktop and mobile). Platform code is confined to src/platform.
+# SDL frontend (desktop, mobile, Nintendo Switch). Platform code is confined to src/platform.
 # ---------------------------------------------------------------------------
 if(CHAOTIX_BUILD_FRONTEND)
-    # SDL3: use an installed package, or build it from source (Android/iOS or
-    # when -DCHAOTIX_SDL3_SOURCE_DIR=<path to SDL3 checkout> is given).
-    if(CHAOTIX_SDL3_SOURCE_DIR)
-        add_subdirectory(${CHAOTIX_SDL3_SOURCE_DIR} ${CMAKE_BINARY_DIR}/SDL3 EXCLUDE_FROM_ALL)
+    if(CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+        set(CHAOTIX_USE_SDL2 ON)
+        add_compile_definitions(CHAOTIX_USE_SDL2=1 __SWITCH__=1)
+        find_package(SDL2 CONFIG REQUIRED)
+        find_package(SDL2_ttf CONFIG REQUIRED)
     else()
-        find_package(SDL3 CONFIG REQUIRED)
-    endif()
-    # SDL3_ttf draws the setup and achievement screens. Same rule as SDL3:
-    # an installed package, or a source checkout for the mobile targets.
-    if(CHAOTIX_SDL3_TTF_SOURCE_DIR)
-        set(SDLTTF_VENDORED ON CACHE BOOL "" FORCE)
-        set(SDLTTF_SAMPLES OFF CACHE BOOL "" FORCE)
-        add_subdirectory(${CHAOTIX_SDL3_TTF_SOURCE_DIR} ${CMAKE_BINARY_DIR}/SDL3_ttf EXCLUDE_FROM_ALL)
-    else()
-        find_package(SDL3_ttf CONFIG REQUIRED)
+        # SDL3: use an installed package, or build it from source (Android/iOS or
+        # when -DCHAOTIX_SDL3_SOURCE_DIR=<path to SDL3 checkout> is given).
+        if(CHAOTIX_SDL3_SOURCE_DIR)
+            add_subdirectory(${CHAOTIX_SDL3_SOURCE_DIR} ${CMAKE_BINARY_DIR}/SDL3 EXCLUDE_FROM_ALL)
+        else()
+            find_package(SDL3 CONFIG REQUIRED)
+        endif()
+        # SDL3_ttf draws the setup and achievement screens. Same rule as SDL3:
+        # an installed package, or a source checkout for the mobile targets.
+        if(CHAOTIX_SDL3_TTF_SOURCE_DIR)
+            set(SDLTTF_VENDORED ON CACHE BOOL "" FORCE)
+            set(SDLTTF_SAMPLES OFF CACHE BOOL "" FORCE)
+            add_subdirectory(${CHAOTIX_SDL3_TTF_SOURCE_DIR} ${CMAKE_BINARY_DIR}/SDL3_ttf EXCLUDE_FROM_ALL)
+        else()
+            find_package(SDL3_ttf CONFIG REQUIRED)
+        endif()
     endif()
 
     # Data the program cannot run without is compiled into the binary rather
@@ -156,12 +165,53 @@ if(CHAOTIX_BUILD_FRONTEND)
         # SDLActivity loads libmain.so and calls SDL_main.
         add_library(chaotix SHARED ${_frontend_sources})
         set_target_properties(chaotix PROPERTIES OUTPUT_NAME main)
+        target_link_libraries(chaotix PRIVATE chaotix_game SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+        chaotix_set_warnings(chaotix)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+        add_executable(chaotix ${_frontend_sources})
+        set_target_properties(chaotix PROPERTIES OUTPUT_NAME "ChaotixRecompiled")
+        if(NOT DEFINED DEVKITPRO)
+            set(DEVKITPRO /opt/devkitpro)
+        endif()
+        target_include_directories(chaotix PRIVATE ${DEVKITPRO}/portlibs/switch/include ${DEVKITPRO}/libnx/include)
+        target_link_libraries(chaotix PRIVATE
+            chaotix_game
+            -Wl,--allow-multiple-definition
+            -lSDL2_ttf -lSDL2 -lGLESv2 -lEGL -lglapi -ldrm_nouveau
+            -lfreetype -lharfbuzz -lbz2 -lpng -lz -lnx -lm
+        )
+        chaotix_set_warnings(chaotix)
+
+        # Prepare RomFS directory
+        set(CHAOTIX_ROMFS_DIR "${CMAKE_CURRENT_BINARY_DIR}/romfs")
+        file(MAKE_DIRECTORY "${CHAOTIX_ROMFS_DIR}")
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/rom/Knuckles Chaotix 32X (5) [!].bin")
+            file(COPY_FILE "${CMAKE_CURRENT_SOURCE_DIR}/rom/Knuckles Chaotix 32X (5) [!].bin"
+                 "${CHAOTIX_ROMFS_DIR}/rom.bin" ONLY_IF_DIFFERENT)
+        endif()
+
+        # NACP metadata
+        nx_generate_nacp(chaotix_nacp
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nacp"
+            NAME "Knuckles' Chaotix Recompiled"
+            AUTHOR "Thorhax"
+            VERSION "${PROJECT_VERSION}"
+        )
+
+        # NRO target
+        nx_create_nro(chaotix_nro
+            TARGET chaotix
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nro"
+            ICON "${CMAKE_CURRENT_SOURCE_DIR}/platforms/switch/icon.png"
+            NACP "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nacp"
+            ROMFS "${CHAOTIX_ROMFS_DIR}"
+        )
     else()
         add_executable(chaotix WIN32 MACOSX_BUNDLE ${_frontend_sources})
         set_target_properties(chaotix PROPERTIES OUTPUT_NAME "ChaotixRecompiled")
+        target_link_libraries(chaotix PRIVATE chaotix_game SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+        chaotix_set_warnings(chaotix)
     endif()
-    target_link_libraries(chaotix PRIVATE chaotix_game SDL3::SDL3 SDL3_ttf::SDL3_ttf)
-    chaotix_set_warnings(chaotix)
     if(APPLE)
         set_target_properties(chaotix PROPERTIES
             MACOSX_BUNDLE_BUNDLE_NAME "Chaotix Recompiled"

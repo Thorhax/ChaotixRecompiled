@@ -1,7 +1,5 @@
 #include "ui.h"
 
-#include <SDL3_ttf/SDL_ttf.h>
-
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -32,9 +30,15 @@ constexpr float kSizes[size_t(Font::Count_)] = {13.0f, 16.0f, 20.0f, 30.0f, 16.0
 // long before it expires.
 constexpr uint64_t kCacheTtlFrames = 240;
 
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+SDL_Color to_fcolor(Color c) {
+    return {c.r, c.g, c.b, c.a};
+}
+#else
 SDL_FColor to_fcolor(Color c) {
     return {float(c.r) / 255.0f, float(c.g) / 255.0f, float(c.b) / 255.0f, float(c.a) / 255.0f};
 }
+#endif
 
 // How many segments each quarter turn is drawn with. Taken from the outer
 // radius so that an outline's inner and outer loops have matching point
@@ -65,6 +69,119 @@ std::vector<SDL_FPoint> rounded_outline(const SDL_FRect& r, float radius, int st
 }
 
 } // namespace
+
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+
+bool Ui::init(SDL_Renderer* renderer) {
+    renderer_ = renderer;
+    if (TTF_WasInit() == 0 && TTF_Init() < 0) {
+        LOGW("ui", "TTF_Init: %s", TTF_GetError());
+        return false;
+    }
+    set_sizes();
+    for (size_t i = 0; i < size_t(Font::Count_); ++i) {
+        if (!fonts_[i]) { shutdown(); return false; }
+    }
+    return true;
+}
+
+void Ui::shutdown() {
+    drop_cache();
+    for (auto*& f : fonts_) {
+        if (f) TTF_CloseFont(f);
+        f = nullptr;
+    }
+    renderer_ = nullptr;
+}
+
+void Ui::drop_cache() {
+    for (auto& [key, entry] : cache_) {
+        if (entry.tex) SDL_DestroyTexture(entry.tex);
+    }
+    cache_.clear();
+}
+
+void Ui::set_sizes() {
+    drop_cache();
+    for (size_t i = 0; i < size_t(Font::Count_); ++i) {
+        if (fonts_[i]) {
+            TTF_CloseFont(fonts_[i]);
+            fonts_[i] = nullptr;
+        }
+        const Font f = Font(i);
+        const bool bold = f == Font::Subtitle || f == Font::Title;
+        const unsigned char* data = is_pixel(f) ? font_pixel : bold ? font_semibold : font_regular;
+        const size_t len = is_pixel(f) ? font_pixel_len : bold ? font_semibold_len : font_regular_len;
+        SDL_RWops* io = SDL_RWFromConstMem(data, (int)len);
+        if (!io) break;
+        float size = kSizes[i] * scale_;
+        if (is_pixel(Font(i))) size = std::max(8.0f, std::round(size / 8.0f) * 8.0f);
+        fonts_[i] = TTF_OpenFontRW(io, 1, int(size + 0.5f));
+        if (!fonts_[i]) {
+            LOGW("ui", "TTF_OpenFontRW: %s", TTF_GetError());
+            break;
+        }
+        TTF_SetFontHinting(fonts_[i], is_pixel(f) ? TTF_HINTING_MONO : TTF_HINTING_LIGHT);
+    }
+}
+
+void Ui::begin_frame() {
+    ++frame_;
+    int ow = 0, oh = 0;
+    SDL_GetRendererOutputSize(renderer_, &ow, &oh);
+    width_ = float(ow);
+    height_ = float(oh);
+    const float want = std::clamp(std::max(float(oh), float(ow) * 0.42f) / 720.0f, 0.62f, 3.0f);
+    if (std::fabs(want - scale_) > 0.01f) {
+        scale_ = want;
+        set_sizes();
+    }
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+}
+
+void Ui::end_frame() {
+    for (auto it = cache_.begin(); it != cache_.end();) {
+        if (frame_ - it->second.used > kCacheTtlFrames) {
+            if (it->second.tex) SDL_DestroyTexture(it->second.tex);
+            it = cache_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+float Ui::line_height(Font f) const {
+    return fonts_[size_t(f)] ? float(TTF_FontHeight(fonts_[size_t(f)])) : 0.0f;
+}
+
+float Ui::text_width(Font f, const std::string& s) {
+    if (!fonts_[size_t(f)] || s.empty()) return 0;
+    int w = 0, h = 0;
+    if (TTF_SizeUTF8(fonts_[size_t(f)], s.c_str(), &w, &h) != 0) return 0;
+    return float(w);
+}
+
+float Ui::text(Font f, float x, float y, const std::string& s, Color c) {
+    if (!fonts_[size_t(f)] || s.empty()) return 0;
+    CacheKey key{int(f), s, uint32_t(c.r | (c.g << 8) | (c.b << 16) | (c.a << 24))};
+    auto it = cache_.find(key);
+    if (it == cache_.end()) {
+        SDL_Color sc{c.r, c.g, c.b, c.a};
+        SDL_Surface* surf = TTF_RenderUTF8_Blended(fonts_[size_t(f)], s.c_str(), sc);
+        if (!surf) return 0;
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer_, surf);
+        int w = surf->w, h = surf->h;
+        SDL_FreeSurface(surf);
+        if (!tex) return 0;
+        it = cache_.emplace(std::move(key), CacheEntry{tex, w, h, frame_}).first;
+    }
+    it->second.used = frame_;
+    SDL_FRect dst{x, y, float(it->second.w), float(it->second.h)};
+    SDL_RenderCopyF(renderer_, it->second.tex, nullptr, &dst);
+    return float(it->second.w);
+}
+
+#else
 
 bool Ui::init(SDL_Renderer* renderer) {
     renderer_ = renderer;
@@ -197,6 +314,8 @@ float Ui::text(Font f, float x, float y, const std::string& s, Color c) {
     return float(w);
 }
 
+#endif
+
 std::string Ui::shorten(Font f, const std::string& s, float max_w, bool is_path) {
     if (max_w <= 0 || text_width(f, s) <= max_w) return s;
     const std::string dots = "...";
@@ -241,7 +360,7 @@ void Ui::rect(const SDL_FRect& r, Color c, float radius) {
         return;
     }
     const std::vector<SDL_FPoint> pts = rounded_outline(r, radius, arc_steps(radius));
-    const SDL_FColor col = to_fcolor(c);
+    const auto col = to_fcolor(c);
     std::vector<SDL_Vertex> verts;
     verts.reserve(pts.size() + 1);
     verts.push_back({{r.x + r.w * 0.5f, r.y + r.h * 0.5f}, col, {0, 0}});
@@ -266,7 +385,7 @@ void Ui::outline(const SDL_FRect& r, Color c, float radius, float thickness) {
     const std::vector<SDL_FPoint> out = rounded_outline(r, radius, steps);
     const std::vector<SDL_FPoint> in =
         rounded_outline(inner, std::max(0.0f, radius - thickness), steps);
-    const SDL_FColor col = to_fcolor(c);
+    const auto col = to_fcolor(c);
     std::vector<SDL_Vertex> verts;
     verts.reserve(out.size() * 2);
     for (size_t i = 0; i < out.size(); ++i) {

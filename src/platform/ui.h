@@ -8,16 +8,18 @@
 // asset directory has been located -- which matters, because the setup screen
 // is the first thing a new user sees.
 
-#include <SDL3/SDL.h>
+#include "platform/sdl_compat.h"
 
 #include <cstdint>
 #include <map>
 #include <string>
 #include <utility>
 
+#if !defined(CHAOTIX_USE_SDL2) && !defined(__SWITCH__)
 struct TTF_Font;
 struct TTF_Text;
 struct TTF_TextEngine;
+#endif
 
 namespace chaotix::ui {
 
@@ -66,7 +68,11 @@ public:
     // caller is then expected to fall back to SDL's debug text.
     bool init(SDL_Renderer* renderer);
     void shutdown();
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+    bool ready() const { return renderer_ != nullptr && fonts_[0] != nullptr; }
+#else
     bool ready() const { return engine_ != nullptr; }
+#endif
 
     // Re-reads the output size and rescales the fonts if it changed.
     void begin_frame();
@@ -96,6 +102,23 @@ public:
     SDL_FRect pill(float x, float y, const std::string& label, Color fg, Color bg);
 
 private:
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+    struct CacheKey {
+        int font = 0;
+        std::string text;
+        uint32_t color = 0;
+        bool operator<(const CacheKey& o) const {
+            if (font != o.font) return font < o.font;
+            if (color != o.color) return color < o.color;
+            return text < o.text;
+        }
+    };
+    struct CacheEntry {
+        SDL_Texture* tex = nullptr;
+        int w = 0, h = 0;
+        uint64_t used = 0;
+    };
+#else
     struct CacheKey {
         int font;
         std::string text;
@@ -107,14 +130,17 @@ private:
         TTF_Text* text = nullptr;
         uint64_t used = 0;
     };
-
     TTF_Text* acquire(Font f, const std::string& s);
+#endif
+
     std::string shorten(Font f, const std::string& s, float max_w, bool is_path);
     void set_sizes();
     void drop_cache();
 
     SDL_Renderer* renderer_ = nullptr;
+#if !defined(CHAOTIX_USE_SDL2) && !defined(__SWITCH__)
     TTF_TextEngine* engine_ = nullptr;
+#endif
     TTF_Font* fonts_[size_t(Font::Count_)] = {};
     std::map<CacheKey, CacheEntry> cache_;
     uint64_t frame_ = 0;

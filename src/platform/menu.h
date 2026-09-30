@@ -4,7 +4,7 @@
 // style of the era, with an options page behind it. Everything here is drawn
 // by the host over the emulated image; the game's own menus are untouched.
 
-#include <SDL3/SDL.h>
+#include "platform/sdl_compat.h"
 
 #include <functional>
 #include <string>

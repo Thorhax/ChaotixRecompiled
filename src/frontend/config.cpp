@@ -51,6 +51,12 @@ void Config::set_defaults() {
         {"a", "Keypad 1"}, {"b", "Keypad 3"}, {"c", "Keypad 0"}, {"start", "Keypad Enter"},
         {"x", "Keypad 7"}, {"y", "Keypad 9"}, {"z", "Keypad 5"}, {"mode", "Keypad +"},
     };
+#if defined(__SWITCH__)
+    viewport.aspect = AspectMode::R16_9;
+    widescreen = true;
+    window_mode = WindowMode::Fullscreen;
+    menu_button = "back";
+#endif
 }
 
 bool Config::load(const std::string& path) {

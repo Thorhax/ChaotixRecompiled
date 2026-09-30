@@ -4,8 +4,10 @@
 // InputState, the output framebuffer and SaveStore paths. SDL_Renderer picks a
 // native backend per platform (Direct3D 11/12, Metal, Vulkan, OpenGL/ES), so
 // no graphics API is referenced directly.
-#include <SDL3/SDL.h>
+#include "platform/sdl_compat.h"
+#if !defined(CHAOTIX_USE_SDL2) && !defined(__SWITCH__)
 #include <SDL3/SDL_main.h>
+#endif
 
 #include "frontend/config.h"
 #include "frontend/time_attack.h"
@@ -25,6 +27,25 @@
 #include "runtime/patches.h"
 #include "runtime/save.h"
 #include "runtime/system.h"
+
+#if defined(__SWITCH__)
+#include <switch.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+extern "C" void userAppInit(void)
+{
+    romfsInit();
+    mkdir("sdmc:/switch", 0777);
+    mkdir("sdmc:/switch/chaotix", 0777);
+    chdir("sdmc:/switch/chaotix");
+}
+
+extern "C" void userAppExit(void)
+{
+    romfsExit();
+}
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -60,7 +81,11 @@ struct App {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
     SDL_Texture* texture = nullptr;
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+    SDL_AudioDeviceID audio_dev = 0;
+#else
     SDL_AudioStream* audio = nullptr;
+#endif
     std::vector<SDL_Gamepad*> pads;
     TouchControls touch;
     bool touch_enabled = false;
@@ -207,6 +232,13 @@ std::vector<std::string> rom_search_dirs(const App& app) {
         dirs.push_back(std::filesystem::path(base));
     }
     dirs.push_back(std::filesystem::path(app.store.root()) / "rom");
+#if defined(__SWITCH__)
+    dirs.push_back("romfs:/");
+    dirs.push_back("romfs:/rom");
+    dirs.push_back("sdmc:/switch/chaotix");
+    dirs.push_back("sdmc:/switch/chaotix/rom");
+    dirs.push_back("sdmc:/switch/chaotix/__ROM__");
+#elif !defined(CHAOTIX_USE_SDL2)
     // Desktop: the usual download/document folders. Mobile: the app's own
     // documents folder, which is what file managers expose.
     for (SDL_Folder f : {SDL_FOLDER_DOWNLOADS, SDL_FOLDER_DOCUMENTS, SDL_FOLDER_DESKTOP})
@@ -214,6 +246,7 @@ std::vector<std::string> rom_search_dirs(const App& app) {
             dirs.push_back(std::filesystem::path(p));
             dirs.push_back(std::filesystem::path(p) / "Chaotix");
         }
+#endif
 #if defined(SDL_PLATFORM_ANDROID)
     if (const char* ext = SDL_GetAndroidExternalStoragePath()) {
         dirs.push_back(std::filesystem::path(ext));
@@ -249,6 +282,22 @@ std::string rom_from_args(int argc, char** argv) {
 }
 
 void apply_window_mode(App& app) {
+#if defined(__SWITCH__)
+    (void)app;
+#elif defined(CHAOTIX_USE_SDL2)
+    switch (app.cfg.window_mode) {
+    case WindowMode::Windowed:
+        SDL_SetWindowFullscreen(app.window, 0);
+        SDL_SetWindowBordered(app.window, SDL_TRUE);
+        break;
+    case WindowMode::Borderless:
+        SDL_SetWindowFullscreen(app.window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+        break;
+    case WindowMode::Fullscreen:
+        SDL_SetWindowFullscreen(app.window, SDL_WINDOW_FULLSCREEN);
+        break;
+    }
+#else
     switch (app.cfg.window_mode) {
     case WindowMode::Windowed:
         SDL_SetWindowFullscreen(app.window, false);
@@ -268,10 +317,11 @@ void apply_window_mode(App& app) {
         break;
     }
     }
+#endif
 }
 
 uint16_t keyboard_buttons(const App& app, int player) {
-    const bool* ks = SDL_GetKeyboardState(nullptr);
+    const auto* ks = SDL_GetKeyboardState(nullptr);
     const auto& binds = player == 0 ? app.cfg.keys : app.cfg.keys2;
     uint16_t out = 0;
     for (const auto& [name, keyname] : binds) {
@@ -487,10 +537,17 @@ void handle_pad_button(App& app, Uint8 button) {
 
 void handle_key(App& app, const SDL_KeyboardEvent& k) {
     if (k.repeat) return;
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+    const SDL_Keycode key = k.keysym.sym;
+    const Uint16 mod = k.keysym.mod;
+#else
+    const SDL_Keycode key = k.key;
+    const SDL_Keymod mod = k.mod;
+#endif
     // An open menu owns the keyboard, so the function keys below cannot be
     // triggered from underneath it.
-    if (app.menu.on_key(k.key)) return;
-    switch (k.key) {
+    if (app.menu.on_key(key)) return;
+    switch (key) {
     case SDLK_ESCAPE: menu_back(app); break;
     case SDLK_F1: app.cfg.debug_overlay = !app.cfg.debug_overlay; break;
     case SDLK_F2: {
@@ -516,7 +573,7 @@ void handle_key(App& app, const SDL_KeyboardEvent& k) {
         apply_window_mode(app);
         break;
     case SDLK_RETURN:
-        if (k.mod & SDL_KMOD_ALT) {
+        if (mod & (KMOD_ALT)) {
             app.cfg.window_mode = app.cfg.window_mode == WindowMode::Windowed ? WindowMode::Borderless : WindowMode::Windowed;
             apply_window_mode(app);
         }
@@ -552,10 +609,17 @@ int main(int argc, char** argv) {
     App app;
     // The game image is 4:3 or wider: ask mobile platforms for landscape.
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
+        std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
+        return 1;
+    }
+#else
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
+#endif
     // --user-dir puts settings, saves and the installed ROM in a folder of the
     // caller's choice (portable installs, and the setup test).
     std::string user_dir;
@@ -567,9 +631,13 @@ int main(int argc, char** argv) {
     }
     if (!user_dir.empty() && user_dir.back() != '/' && user_dir.back() != '\\') user_dir += '/';
     if (user_dir.empty()) {
+#if defined(__SWITCH__)
+        user_dir = "sdmc:/switch/chaotix/";
+#else
         char* pref = SDL_GetPrefPath("ChaotixRecompiled", "ChaotixRecompiled");
         user_dir = pref ? pref : "./";
         SDL_free(pref);
+#endif
     } else {
         std::error_code ec;
         std::filesystem::create_directories(user_dir, ec);
@@ -678,9 +746,19 @@ int main(int argc, char** argv) {
     int win_h = kActiveLines * app.cfg.window_scale;
     int win_w = int(std::lround(win_h * 4.0 / 3.0));
     if (app.cfg.raw.count("cli.w")) { win_w = std::atoi(app.cfg.raw["cli.w"].c_str()); win_h = std::atoi(app.cfg.raw["cli.h"].c_str()); }
+#if defined(__SWITCH__)
+    app.window = SDL_CreateWindow("Knuckles' Chaotix Recompiled", 0, 0, 1280, 720, SDL_WINDOW_FULLSCREEN);
+    if (!app.window) { std::fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
+    app.renderer = SDL_CreateRenderer(app.window, -1, SDL_RENDERER_ACCELERATED | (app.cfg.vsync ? SDL_RENDERER_PRESENTVSYNC : 0));
+#elif defined(CHAOTIX_USE_SDL2)
+    app.window = SDL_CreateWindow("Knuckles' Chaotix Recompiled", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, win_w, win_h, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    if (!app.window) { std::fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
+    app.renderer = SDL_CreateRenderer(app.window, -1, SDL_RENDERER_ACCELERATED | (app.cfg.vsync ? SDL_RENDERER_PRESENTVSYNC : 0));
+#else
     app.window = SDL_CreateWindow("Knuckles' Chaotix Recompiled", win_w, win_h, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!app.window) { std::fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
     app.renderer = SDL_CreateRenderer(app.window, nullptr);
+#endif
     if (!app.renderer) { std::fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError()); return 1; }
     SDL_SetRenderVSync(app.renderer, app.cfg.vsync ? 1 : 0);
     LOGI("app", "renderer: %s", SDL_GetRendererName(app.renderer));
@@ -758,6 +836,16 @@ int main(int argc, char** argv) {
     std::error_code rom_ec;
     if (rom_path.empty() && std::filesystem::exists(installed, rom_ec)) rom_path = installed;
     if (rom_path.empty()) rom_path = app.cfg.rom_path;
+#if defined(__SWITCH__)
+    if (rom_path.empty()) {
+        for (const char* p : {"romfs:/rom.bin", "romfs:/rom/rom.bin", "romfs:/Knuckles Chaotix 32X (5) [!].bin", "sdmc:/switch/chaotix/rom.bin"}) {
+            if (std::filesystem::exists(p, rom_ec)) {
+                rom_path = p;
+                break;
+            }
+        }
+    }
+#endif
 
     std::string err;
     // Avoid rewriting a verified installed copy on every launch. Old builds
@@ -823,6 +911,23 @@ int main(int argc, char** argv) {
     app.texture = SDL_CreateTexture(app.renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, kScreenWidth, kScreenHeight);
     SDL_SetTextureScaleMode(app.texture, app.cfg.linear_filter ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
     apply_window_mode(app);
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+    if (app.cfg.audio && !app.autotest_frames) {
+        SDL_AudioSpec want, have;
+        SDL_zero(want);
+        want.freq = int(kAudioRate + 0.5);
+        want.format = AUDIO_S16SYS;
+        want.channels = 2;
+        want.samples = 1024;
+        app.audio_dev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+        if (app.audio_dev > 0) {
+            SDL_PauseAudioDevice(app.audio_dev, 0);
+            app.m->audio_enabled = true;
+        } else {
+            LOGW("audio", "cannot open audio device: %s", SDL_GetError());
+        }
+    }
+#else
     if (app.cfg.audio && !app.autotest_frames) {
         // The machine produces 16-bit stereo at the YM2612 native rate; SDL
         // resamples to the device. Emulated time drives production, so the
@@ -837,6 +942,7 @@ int main(int argc, char** argv) {
             LOGW("audio", "cannot open audio device: %s", SDL_GetError());
         }
     }
+#endif
     // On: always drawn. Auto: only once the screen has actually been touched,
     // so a phone plugged into a controller is not covered in buttons nobody
     // is using. Off: never.
@@ -848,7 +954,11 @@ int main(int argc, char** argv) {
     double accumulator = 0;
     uint64_t fps_t0 = last, fps_frames = 0, fps_sims = 0;
 
+#if defined(__SWITCH__)
+    while (appletMainLoop() && app.running) {
+#else
     while (app.running) {
+#endif
         // Wait before polling input so it is fresh when the frame is run.
         // Rendering an unchanged frame here can block in VSync and leave the
         // next pass catching up by two frames. The original NTSC rate, rather
@@ -898,14 +1008,19 @@ int main(int argc, char** argv) {
                 if (app.menu.open()) { app.menu.on_touch_up(); break; }
                 app.fingers.erase(e.tfinger.fingerID);
                 break;
-            case SDL_EVENT_WINDOW_FOCUS_LOST: case SDL_EVENT_DID_ENTER_BACKGROUND:
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+                if (e.window.event != SDL_WINDOWEVENT_FOCUS_LOST) break;
+#endif
+                [[fallthrough]];
+            case SDL_EVENT_DID_ENTER_BACKGROUND:
                 if (app.m->sram_dirty) app.store.store_sram(*app.m);
                 break;
             default: break;
             }
         }
-        const bool* ks = SDL_GetKeyboardState(nullptr);
-        app.fast_forward = ks[SDL_SCANCODE_TAB];
+        const auto* ks = SDL_GetKeyboardState(nullptr);
+        app.fast_forward = ks[SDL_SCANCODE_TAB] != 0;
 
         // Unified input: keyboard | gamepads | touch -> InputState. While the
         // menu is open it takes the controls, so driving it does not also move
@@ -958,10 +1073,17 @@ int main(int argc, char** argv) {
                 if (k.done || app.m->frame_count < k.frame) continue;
                 k.done = true;
                 SDL_Event ke{};
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+                ke.type = SDL_KEYDOWN;
+                ke.key.keysym.sym = k.key;
+                ke.key.state = SDL_PRESSED;
+                ke.key.repeat = 0;
+#else
                 ke.type = SDL_EVENT_KEY_DOWN;
                 ke.key.key = k.key;
                 ke.key.down = true;
                 ke.key.repeat = false;
+#endif
                 SDL_PushEvent(&ke);
             }
             // Scripted input is applied per emulated frame (deterministic).
@@ -991,6 +1113,29 @@ int main(int argc, char** argv) {
         if (steps) app.timing.emu_ms = double(emu_t1 - emu_t0) * 1000.0 / double(freq) / steps;
         fps_sims += uint64_t(steps);
 
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+        if (app.audio_dev > 0) {
+            if (!app.m->audio_out.empty()) {
+                if (app.fast_forward) {
+                    app.m->audio_out.clear();
+                } else {
+                    if (app.cfg.volume < 100) {
+                        const int vol = app.cfg.volume;
+                        for (auto& s : app.m->audio_out) {
+                            s = int16_t((int32_t(s) * vol) / 100);
+                        }
+                    }
+                    SDL_QueueAudio(app.audio_dev, app.m->audio_out.data(), uint32_t(app.m->audio_out.size() * sizeof(int16_t)));
+                    app.m->audio_out.clear();
+                }
+            }
+            const uint32_t queued = SDL_GetQueuedAudioSize(app.audio_dev);
+            const uint32_t target = uint32_t(kAudioRate * 0.05 * 4);
+            if (queued > target * 6) SDL_ClearQueuedAudio(app.audio_dev);
+        } else {
+            app.m->audio_out.clear();
+        }
+#else
         // Audio: hand over what the machine produced; keep ~50 ms queued with a
         // gentle rate adjustment instead of dropping or stretching audio.
         if (app.audio) {
@@ -1010,6 +1155,7 @@ int main(int argc, char** argv) {
         } else {
             app.m->audio_out.clear();
         }
+#endif
 
         // SRAM autosave shortly after the game writes it.
         if (app.m->sram_dirty && !app.autotest_frames) {
@@ -1054,8 +1200,17 @@ int main(int argc, char** argv) {
             app.ui.end_frame();
         }
         if (app.cfg.debug_overlay) {
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+            SDL_DisplayMode dm;
+            if (SDL_GetCurrentDisplayMode(0, &dm) == 0) {
+                app.timing.refresh_hz = dm.refresh_rate ? unsigned(dm.refresh_rate) : 60;
+            } else {
+                app.timing.refresh_hz = 60;
+            }
+#else
             const SDL_DisplayMode* dm = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(app.window));
             app.timing.refresh_hz = dm ? unsigned(dm->refresh_rate + 0.5f) : 0;
+#endif
             app.timing.fast_forward = app.fast_forward;
             char vline[200];
             std::snprintf(vline, sizeof vline, "video: %dx%d out, image %.0fx%.0f, aspect %s, %s, %s, %s, wide %d+%d%s", ow, oh, vp.image.w, vp.image.h,
@@ -1104,7 +1259,14 @@ int main(int argc, char** argv) {
         app.cfg.save(app.store.config_file());
     }
     if (!app.record_path.empty()) write_recording(app, app.record_path);
+#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
+    if (app.audio_dev > 0) {
+        SDL_CloseAudioDevice(app.audio_dev);
+        app.audio_dev = 0;
+    }
+#else
     if (app.audio) SDL_DestroyAudioStream(app.audio);
+#endif
     for (SDL_Gamepad* g : app.pads) SDL_CloseGamepad(g);
     SDL_DestroyTexture(app.texture);
     SDL_DestroyRenderer(app.renderer);

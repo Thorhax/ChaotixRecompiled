@@ -15,9 +15,14 @@ generated/*
 build*/
 out/
 analysis_out/
+dist/
+*.nro
+*.elf
+*.nacp
 
 # Runtime output
 *.png
+!platforms/**/*.png
 *.ppm
 *.wav
 *.trace

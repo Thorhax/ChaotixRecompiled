@@ -85,6 +85,17 @@
         "CHAOTIX_BUILD_TOOLS": "OFF",
         "CHAOTIX_BUILD_TESTS": "OFF"
       }
+    },
+    {
+      "name": "switch",
+      "displayName": "Nintendo Switch (devkitPro) — Ninja (.nro)",
+      "inherits": "base",
+      "generator": "Ninja",
+      "toolchainFile": "/opt/devkitpro/cmake/Switch.cmake",
+      "cacheVariables": {
+        "CHAOTIX_BUILD_TOOLS": "OFF",
+        "CHAOTIX_BUILD_TESTS": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -92,7 +103,8 @@
     { "name": "windows-ninja", "configurePreset": "windows-ninja" },
     { "name": "linux", "configurePreset": "linux" },
     { "name": "macos-universal", "configurePreset": "macos-universal" },
-    { "name": "android-arm64", "configurePreset": "android-arm64" }
+    { "name": "android-arm64", "configurePreset": "android-arm64" },
+    { "name": "switch", "configurePreset": "switch" }
   ],
   "testPresets": [
     { "name": "windows-ninja", "configurePreset": "windows-ninja", "output": { "outputOnFailure": true } },
