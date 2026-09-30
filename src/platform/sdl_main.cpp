@@ -166,8 +166,14 @@ struct App {
     // Touch devices have neither Esc nor a stick to click, so the progress
     // counter doubles as the way in. Empty when it is not being drawn.
     SDL_FRect achievement_tap{0, 0, 0, 0};
-    struct Toast { std::string title, description; Uint64 until_ms = 0; };
+    struct Toast {
+        std::string title;
+        std::string description;
+        Uint64 until_ms = 0;
+        std::string category = "ACHIEVEMENT UNLOCKED";
+    };
     std::vector<Toast> toasts;
+    uint16_t prev_cheat_dpad = 0;
 };
 
 // Looks for a data file shipped with the build: next to the executable, in an
@@ -421,11 +427,22 @@ void draw_toasts(App& app) {
         const SDL_FRect box{g.px(14), ty, toast_w, toast_h};
         g.panel(box, ui::theme::surface_raised, ui::theme::accent, g.px(10), g.px(1.5f));
         g.text_fit(ui::Font::Small, box.x + g.px(14), ty + g.px(7), toast_w - g.px(28),
-                   "ACHIEVEMENT UNLOCKED", ui::theme::accent);
+                   t.category.c_str(), ui::theme::accent);
         g.text_fit(ui::Font::Body, box.x + g.px(14), ty + g.px(6) + g.line_height(ui::Font::Small),
-                   toast_w - g.px(28), t.title, ui::theme::text);
+                   toast_w - g.px(28), t.title.c_str(), ui::theme::text);
         ty += toast_h + g.px(8);
     }
+}
+
+void add_cheat_toast(App& app, const std::string& title) {
+    for (auto& t : app.toasts) {
+        if (t.category == "CHEAT ACTIVATED") {
+            t.title = title;
+            t.until_ms = SDL_GetTicks() + 3000;
+            return;
+        }
+    }
+    app.toasts.push_back({title, "", SDL_GetTicks() + 3000, "CHEAT ACTIVATED"});
 }
 
 void save_screenshot(App& app) {
@@ -522,7 +539,7 @@ void follow_time_attack(App& app) {
                              : !timed ? "This level does not keep a clock."
                              : best   ? "A new best for this stage."
                                       : "Not a new best.";
-    app.toasts.push_back({title, note, SDL_GetTicks() + 6000});
+    app.toasts.push_back({title, note, SDL_GetTicks() + 6000, "TIME ATTACK"});
     // The run, as it was played. A recorded time that disagrees with what the
     // game showed can then be looked into without anyone having had to set up
     // a recording beforehand.
@@ -1039,6 +1056,119 @@ int main(int argc, char** argv) {
             // Touch belongs to player 1; the on-screen pad has no second set.
             raw |= device_buttons(app, 0) | touch_held;
             raw2 = device_buttons(app, 1);
+
+            // In-game cheat combinations: Hold ZL + ZR and tap D-Pad directions
+            if (app.m) {
+                bool zl_held = false;
+                bool zr_held = false;
+                uint16_t cheat_dpad = 0;
+
+                for (SDL_Gamepad* g : app.pads) {
+                    const Sint16 zl_val = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
+                    const Sint16 zr_val = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+                    if (zl_val > 16000 && zr_val > 16000) {
+                        zl_held = true;
+                        zr_held = true;
+                        if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_DPAD_UP)) cheat_dpad |= PAD_UP;
+                        if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_DPAD_DOWN)) cheat_dpad |= PAD_DOWN;
+                        if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_DPAD_LEFT)) cheat_dpad |= PAD_LEFT;
+                        if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_DPAD_RIGHT)) cheat_dpad |= PAD_RIGHT;
+                    }
+                }
+
+                // Keyboard fallback for development / PC testing
+                if ((ks[SDL_SCANCODE_LSHIFT] || ks[SDL_SCANCODE_Z]) &&
+                    (ks[SDL_SCANCODE_RSHIFT] || ks[SDL_SCANCODE_R])) {
+                    zl_held = true;
+                    zr_held = true;
+                    if (ks[SDL_SCANCODE_UP]) cheat_dpad |= PAD_UP;
+                    if (ks[SDL_SCANCODE_DOWN]) cheat_dpad |= PAD_DOWN;
+                    if (ks[SDL_SCANCODE_LEFT]) cheat_dpad |= PAD_LEFT;
+                    if (ks[SDL_SCANCODE_RIGHT]) cheat_dpad |= PAD_RIGHT;
+                }
+
+                if (zl_held && zr_held) {
+                    // Prevent character from moving or crouching while holding cheat buttons
+                    raw &= ~(PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT);
+
+                    const uint16_t tapped = cheat_dpad & ~app.prev_cheat_dpad;
+
+                    // Hold ZL+ZR + D-Pad Up: 99 rings
+                    if (tapped & PAD_UP) {
+                        app.m->m68k_write16(0xFFFFE008, 99);
+                        add_cheat_toast(app, "99 RINGS");
+                    }
+
+                    // Hold ZL+ZR + D-Pad Down: 9 lives / Health & Partner recovery
+                    if (tapped & PAD_DOWN) {
+                        const int16_t cur_rings = int16_t(app.m->m68k_read16(0xFFFFE008));
+                        if (cur_rings < 10) app.m->m68k_write16(0xFFFFE008, 10);
+
+                        // Clear ring debt / restore partner tether
+                        app.m->wram[0xFCEA] |= 0x08; // rubberband_flags bset #3
+                        app.m->wram[0xFDD8] = 0xFF; // byte_FFFDD8
+
+                        // Shield for Player 1 & Player 2
+                        const uint16_t p1 = app.m->m68k_read16(0xFFFFE034);
+                        if (p1 != 0) {
+                            const uint16_t sub1 = app.m->m68k_read16(0xFFFF0000 | (p1 + 0x3A));
+                            if (sub1 != 0) app.m->wram[(sub1 + 0x30) & 0xFFFF] |= 0x01;
+                        }
+                        const uint16_t p2 = app.m->m68k_read16(0xFFFFE036);
+                        if (p2 != 0) {
+                            const uint16_t sub2 = app.m->m68k_read16(0xFFFF0000 | (p2 + 0x3A));
+                            if (sub2 != 0) app.m->wram[(sub2 + 0x30) & 0xFFFF] |= 0x01;
+                        }
+                        add_cheat_toast(app, "PARTNER & HEALTH RESTORED (LIVES: INFINITE)");
+                    }
+
+                    // Hold ZL+ZR + D-Pad Left: Toggle invincibility
+                    if (tapped & PAD_LEFT) {
+                        const uint16_t p1 = app.m->m68k_read16(0xFFFFE034);
+                        if (p1 != 0) {
+                            const uint16_t sub1 = app.m->m68k_read16(0xFFFF0000 | (p1 + 0x3A));
+                            if (sub1 != 0) {
+                                const uint16_t cur_timer = app.m->m68k_read16(0xFFFF0000 | (sub1 + 0x32));
+                                const bool enable = (cur_timer == 0);
+                                const uint16_t new_timer = enable ? 0x04B0 : 0x0000;
+                                app.m->m68k_write16(0xFFFF0000 | (sub1 + 0x32), new_timer);
+
+                                const uint16_t p2 = app.m->m68k_read16(0xFFFFE036);
+                                if (p2 != 0) {
+                                    const uint16_t sub2 = app.m->m68k_read16(0xFFFF0000 | (p2 + 0x3A));
+                                    if (sub2 != 0) app.m->m68k_write16(0xFFFF0000 | (sub2 + 0x32), new_timer);
+                                }
+                                add_cheat_toast(app, enable ? "INVINCIBILITY: ON" : "INVINCIBILITY: OFF");
+                            }
+                        }
+                    }
+
+                    // Hold ZL+ZR + D-Pad Right: Enlarge powerup
+                    if (tapped & PAD_RIGHT) {
+                        const uint16_t p1 = app.m->m68k_read16(0xFFFFE034);
+                        if (p1 != 0) {
+                            const uint16_t sub1 = app.m->m68k_read16(0xFFFF0000 | (p1 + 0x3A));
+                            if (sub1 != 0) {
+                                // Clear bit 3 of status flags (+0x30): 0 = Grow/Enlarge, 1 = Shrink
+                                app.m->wram[(sub1 + 0x30) & 0xFFFF] &= ~0x08;
+                                // Set size timer at +0x38 to 0x04B0 (1200 frames / 20 sec)
+                                app.m->m68k_write16(0xFFFF0000 | (sub1 + 0x38), 0x04B0);
+
+                                const uint16_t p2 = app.m->m68k_read16(0xFFFFE036);
+                                if (p2 != 0) {
+                                    const uint16_t sub2 = app.m->m68k_read16(0xFFFF0000 | (p2 + 0x3A));
+                                    if (sub2 != 0) {
+                                        app.m->wram[(sub2 + 0x30) & 0xFFFF] &= ~0x08;
+                                        app.m->m68k_write16(0xFFFF0000 | (sub2 + 0x38), 0x04B0);
+                                    }
+                                }
+                                add_cheat_toast(app, "ENLARGE POWERUP");
+                            }
+                        }
+                    }
+                }
+                app.prev_cheat_dpad = cheat_dpad;
+            }
         }
         uint16_t buttons = raw;
         app.prev_buttons = raw;
@@ -1196,7 +1326,7 @@ int main(int argc, char** argv) {
         }
         if (app.ui.ready()) {
             app.menu.draw(app.ui, app.achievements);
-            if (app.achievements_on) draw_toasts(app);
+            if (app.achievements_on || !app.toasts.empty()) draw_toasts(app);
             app.ui.end_frame();
         }
         if (app.cfg.debug_overlay) {

@@ -42,6 +42,21 @@ This folder contains platform assets and documentation for the Nintendo Switch h
 
 ---
 
+## ⚡ In-Game Cheat Codes
+
+Hold **ZL + ZR** simultaneously and tap a direction on the **D-Pad**:
+
+| Combination | Cheat Effect | On-Screen Toast |
+| :--- | :--- | :--- |
+| **Hold ZL + ZR + D-Pad Up** | Instantly gives **99 Rings** | `99 RINGS` |
+| **Hold ZL + ZR + D-Pad Down** | **9 Lives / Full Recovery** (Clears ring debt, restores partner tether, and gives shields) | `PARTNER & HEALTH RESTORED (LIVES: INFINITE)` |
+| **Hold ZL + ZR + D-Pad Left** | **Toggle Invincibility** powerup ON / OFF (sparkles & invulnerability) | `INVINCIBILITY: ON` / `OFF` |
+| **Hold ZL + ZR + D-Pad Right** | **Enlarge (Grow)** powerup (supersizes player character) | `ENLARGE POWERUP` |
+
+*Note: D-pad movement input to the game is automatically suppressed while holding ZL+ZR so your character does not accidentally duck or jump while triggering cheats.*
+
+---
+
 ## 🛠️ Building from Source
 
 All builds use the standard devkitPro AArch64 environment (`devkitpro-mesa-rust` or `switch-dev` with `libnx`, `switch-sdl2`, and `switch-sdl2_ttf`).
