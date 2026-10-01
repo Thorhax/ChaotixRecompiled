@@ -46,8 +46,8 @@ void Machine::render_line32x(int ln, uint32_t* all, int extra, bool wide_src) {
     uint32_t base = (lineaddr * 2) & 0x1FFFF;
     switch (mode) {
     case 1: {  // packed pixel, 8 bpp
-        uint32_t p = base + (mars.screen_shift & 1);
-        if (wide_src) {
+        const uint32_t p = base + (mars.screen_shift & 1);
+        if (wide_src && rom.version == RomVersion::ChaotixJUE) {
             // Margins come from the host-side shadow (see Machine::fb_margin).
             const uint8_t* sh = fb_margin[mars.fb_display];
             for (int x = -extra; x < 0; ++x) all[x + extra] = encode_idx(sh[(p + uint32_t(x)) & 0x1FFFF], mars.pal, pri);

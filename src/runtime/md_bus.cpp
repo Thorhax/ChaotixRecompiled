@@ -57,6 +57,8 @@ static bool sram_hit(const Machine& m, uint32_t a, uint32_t& idx) {
 uint32_t Machine::pad_read(int port) {
     // 3/6-button pad protocol. Buttons are active low on the wire.
     // pad_th_count counts TH edges since the last timeout (6-button sequencing).
+    uint64_t now = m68k_now_mclk();
+    if (now - pad_th_time[port] > 80000) pad_th_count[port] = 0;
     uint16_t btn = input.pad[port];
     bool th = (io_data[port] & 0x40) || !(io_ctrl[port] & 0x40);
     int phase = input.six_button[port] ? pad_th_count[port] : 0;
@@ -106,7 +108,17 @@ void Machine::z80_bus_write(uint16_t a, uint8_t v) {
     m68k_write8(z80_bank | (a & 0x7FFF), v);
 }
 
+// The 68K takes or gives back the Z80 at an exact moment inside a slice, so
+// the Z80 is first brought up to that moment. Otherwise a request early in a
+// slice also takes the time before it, and with it the one-line V-blank
+// interrupt the sound driver waits on (the sound test's A/B/C hit this).
+void Machine::set_z80_busreq(bool requested) {
+    z80_catch_up(m68k_now_mclk());
+    z80_busreq = requested ? 1 : 0;
+}
+
 void Machine::set_z80_reset(bool held) {
+    z80_catch_up(m68k_now_mclk());
     if (held && !z80_reset) ym.reset();          // the reset line also resets the YM2612
     if (!held && z80_reset) z80::reset(&z80);    // released: Z80 restarts at 0
     z80_reset = held ? 1 : 0;
@@ -251,16 +263,16 @@ void Machine::m68k_write8(uint32_t a, uint32_t v) {
         }
         uint8_t old = io_data[port];
         io_data[port] = uint8_t(v);
+        uint64_t now = m68k_now_mclk();
+        if (now - pad_th_time[port] > 80000) pad_th_count[port] = 0;
         // Count TH edges for 6-button sequencing; the pad resets after ~1.5 ms idle.
         if ((old ^ v) & 0x40) {
-            uint64_t now = m68k_now_mclk();
-            if (now - pad_th_time[port] > 80000) pad_th_count[port] = 0;
             pad_th_count[port]++;
             pad_th_time[port] = now;
         }
         return;
     }
-    if (a >= 0xA11100 && a < 0xA11200) { if (!(a & 1)) z80_busreq = v & 1; return; }
+    if (a >= 0xA11100 && a < 0xA11200) { if (!(a & 1)) set_z80_busreq(v & 1); return; }
     if (a >= 0xA11200 && a < 0xA11300) { if (!(a & 1)) set_z80_reset(!(v & 1)); return; }
     if (a >= 0xA14000 && a < 0xA14104) return;  // TMSS
     if (a == 0xA130F1) { sram_ctrl = uint8_t(v & 3); remap_m68k(); return; }
@@ -292,7 +304,7 @@ void Machine::m68k_write16(uint32_t a, uint32_t v) {
     }
     if (a >= 0xA00000 && a < 0xA10000) { z80_space_write(a, v >> 8); return; }
     if (a >= 0xA10000 && a < 0xA10020) { m68k_write8(a | 1, v & 0xFF); return; }
-    if (a >= 0xA11100 && a < 0xA11200) { z80_busreq = (v >> 8) & 1; return; }
+    if (a >= 0xA11100 && a < 0xA11200) { set_z80_busreq((v >> 8) & 1); return; }
     if (a >= 0xA11200 && a < 0xA11300) { set_z80_reset(!((v >> 8) & 1)); return; }
     if (a >= 0xA14000 && a < 0xA14104) return;
     if (a == 0xA130F0) { m68k_write8(0xA130F1, v & 0xFF); return; }

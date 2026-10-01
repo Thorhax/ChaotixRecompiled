@@ -34,13 +34,13 @@ void check_first(const std::vector<int16_t>& samples, int left, int right) {
 
 TEST(pwm_audio, normal_stereo_keeps_both_sources) {
     const auto samples = render_pwm(0x0105);
-    check_first(samples, -4096, 4096);
+    check_first(samples, -14336, 14336);
 }
 
 TEST(pwm_audio, swapped_stereo_exchanges_the_complete_outputs) {
     const auto normal = render_pwm(0x0105);
     const auto swapped = render_pwm(0x010a);
-    check_first(swapped, 4096, -4096);
+    check_first(swapped, 14336, -14336);
     CHECK_EQ(normal.size(), swapped.size());
     bool exchanged = true;
     for (size_t i = 0; i + 1 < normal.size() && i + 1 < swapped.size(); i += 2)

@@ -4,6 +4,8 @@ add_executable(chaotix_tests
     test_frame_pacing.cpp
     test_pwm_audio.cpp
     test_ym2612.cpp
+    test_psg.cpp
+    test_z80_bus.cpp
     test_m68k.cpp
     test_sh2.cpp
     test_viewport.cpp

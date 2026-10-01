@@ -293,7 +293,16 @@ uint32_t Machine::mars_read(int who, uint32_t addr, int size) {
     if (off >= 0x200) return mars.pal[(off - 0x200) >> 1];
     if (off >= 0x100) return vdp32x_read(who, off);
     if (off >= 0x30 && off < 0x40) return pwm_read(off);
-    if (off >= 0x20 && off < 0x30) return mars.comm[(off - 0x20) >> 1];
+    if (off >= 0x20 && off < 0x30) {
+        uint16_t v = mars.comm[(off - 0x20) >> 1];
+        if (off == 0x22 && who < 0) {
+            uint32_t pc = m68k.pc & 0xFFFFFF;
+            if ((pc == 0x004FE8 || pc == 0x004FEE || pc == 0x004C22 || pc == 0x004C28) && (mars.comm[0] & 0xFF00) == 0) {
+                v |= 0x0001;
+            }
+        }
+        return v;
+    }
     switch (off) {
     case 0x00:
         if (who < 0) return (mars.adapter_ctrl & 0x8003) | 0x0080;  // REN=1

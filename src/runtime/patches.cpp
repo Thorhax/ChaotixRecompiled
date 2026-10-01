@@ -98,6 +98,7 @@ void write_clip(Machine& m, int16_t left, int16_t right) {
 } // namespace
 
 bool wide_scene_active(const Machine& m) {
+    if (m.rom.version != RomVersion::ChaotixJUE) return true;
     return m.level_seen_frame != ~0ull && m.level_seen_frame + 8 >= m.frame_count;
 }
 
@@ -105,6 +106,7 @@ int camera_x(const Machine& m) { return int(int16_t((m.wram[kPlaneAStruct] << 8)
 int camera_y(const Machine& m) { return int(int16_t((m.wram[(kPlaneAStruct + 0x10) & 0xFFFF] << 8) | m.wram[(kPlaneAStruct + 0x11) & 0xFFFF])); }
 
 MarginCut margin_cut(const Machine& m, int extra) {
+    if (m.rom.version != RomVersion::ChaotixJUE) return MarginCut{0, 0};
     // Only the part of the left margin left of the level's origin is blacked
     // out: there is no layout there, so the ring holds unrelated tiles. The
     // camera clamp keeps the margins inside the level's camera range while it
@@ -118,6 +120,10 @@ MarginCut margin_cut(const Machine& m, int extra) {
 void begin_frame(Machine& m) {
     const int e = std::clamp(m.wide_extra, 0, kMaxWideExtra);
     const int eb = std::clamp(m.wide_extra_bottom, 0, kMaxWideExtraBottom);
+    if (m.rom.version != RomVersion::ChaotixJUE) {
+        m.wide_active = (e > 0 || eb > 0);
+        return;
+    }
     // plane_shift is latched when a level loads: turning widescreen on in the
     // middle of a level shows bars until the next load. The bottom rows need
     // no patch, so they only wait for a level scene.
@@ -139,6 +145,7 @@ void begin_frame(Machine& m) {
 }
 
 void install(Machine& m) {
+    if (m.rom.version != RomVersion::ChaotixJUE) return;
     m.m68k.hook = m68k_hook;
     m.m68k.hook_user = &m;
     m.m68k.hook_pcs = kM68kHooks;

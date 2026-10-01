@@ -215,6 +215,13 @@ void Machine::boot_hle_start_sh2() {
 // ---------------------------------------------------------------------------
 // Scheduler
 // ---------------------------------------------------------------------------
+void Machine::z80_catch_up(uint64_t mclk) {
+    const uint64_t target = mclk / 15;
+    if (target <= z80_clock) return;
+    if (!z80_reset && !z80_busreq) z80::run(&z80, int32_t(target - z80_clock));
+    z80_clock = target;
+}
+
 void Machine::run_slice(uint64_t end_mclk) {
     // 68000
     {
@@ -239,12 +246,7 @@ void Machine::run_slice(uint64_t end_mclk) {
     // Z80 (sound CPU), unless held in reset or its bus is taken by the 68K
     {
         ProfScope ps(profile, &stats.prof_ns[PROF_Z80]);
-        uint64_t target = end_mclk / 15;
-        if (target > z80_clock) {
-            int32_t budget = int32_t(target - z80_clock);
-            if (!z80_reset && !z80_busreq) z80::run(&z80, budget);
-            z80_clock = target;
-        }
+        z80_catch_up(end_mclk);
     }
     // SH-2 master then slave (only after the 68K releases them from reset)
     const uint64_t sh_target = end_mclk * 3 / 7;
@@ -283,11 +285,14 @@ void Machine::audio_advance(uint64_t end_mclk) {
     if (!audio_enabled) { ym.tick_timers(n); return; }
     size_t base = audio_out.size();
     ym.generate(n, audio_out);
+    // Mix levels are PicoDrive's, including its final 7/8: one FM channel
+    // peaks at 7/8 of 14 bits, a full-width PWM pulse at 7/8 of 16 bits, and
+    // a PSG channel swings 7/8 of PicoDrive's 0x1200.
     // PWM: 12-bit pulse widths centred on cycle/2; LMD/RMD route the FIFOs.
     auto pwm_level = [&](int sel) -> int32_t {
         if (pwm.cycle <= 1) return 0;
         int32_t v = sel == 1 ? pwm.out_l : sel == 2 ? pwm.out_r : int32_t(pwm.cycle / 2);
-        return (v - int32_t(pwm.cycle / 2)) * 16384 / int32_t(pwm.cycle);
+        return (v - int32_t(pwm.cycle / 2)) * 57344 / int32_t(pwm.cycle);
     };
     // Confirmed stereo routes: 0x05 keeps L/R independent; 0x0a swaps them.
     // Preserve other modes pending hardware verification: reference emulators
@@ -299,7 +304,7 @@ void Machine::audio_advance(uint64_t end_mclk) {
         psg_frac += kMclkPerAudioSample;
         int clocks = psg_frac / 15;
         psg_frac -= clocks * 15;
-        int32_t p = psg.run(clocks) / 2;
+        int32_t p = psg.run(clocks) * 63 / 128;  // +-4095 per channel -> +-2016
         const int32_t in[2] = {audio_out[base + size_t(i) * 2] + p + pl, audio_out[base + size_t(i) * 2 + 1] + p + pr};
         for (int ch = 0; ch < 2; ++ch) {
             // One-pole DC blocker (~17 Hz corner at 53 kHz).

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ChaotixRecompiled VERSION 0.3.5 LANGUAGES C CXX)
+project(ChaotixRecompiled VERSION 0.3.6 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -182,13 +182,8 @@ if(CHAOTIX_BUILD_FRONTEND)
         )
         chaotix_set_warnings(chaotix)
 
-        # Prepare RomFS directory
-        set(CHAOTIX_ROMFS_DIR "${CMAKE_CURRENT_BINARY_DIR}/romfs")
-        file(MAKE_DIRECTORY "${CHAOTIX_ROMFS_DIR}")
-        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/rom/Knuckles Chaotix 32X (5) [!].bin")
-            file(COPY_FILE "${CMAKE_CURRENT_SOURCE_DIR}/rom/Knuckles Chaotix 32X (5) [!].bin"
-                 "${CHAOTIX_ROMFS_DIR}/rom.bin" ONLY_IF_DIFFERENT)
-        endif()
+        # No RomFS: the .nro must never carry the game. Players supply their
+        # own ROM on the SD card (see platforms/switch/README.md).
 
         # NACP metadata
         nx_generate_nacp(chaotix_nacp
@@ -204,7 +199,6 @@ if(CHAOTIX_BUILD_FRONTEND)
             OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nro"
             ICON "${CMAKE_CURRENT_SOURCE_DIR}/platforms/switch/icon.png"
             NACP "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nacp"
-            ROMFS "${CHAOTIX_ROMFS_DIR}"
         )
     else()
         add_executable(chaotix WIN32 MACOSX_BUNDLE ${_frontend_sources})

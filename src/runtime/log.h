@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 
 namespace chaotix {
 
@@ -8,6 +9,9 @@ enum class LogLevel { Error = 0, Warn = 1, Info = 2, Debug = 3, Trace = 4 };
 
 void log_set_level(LogLevel lvl);
 LogLevel log_get_level();
+bool log_open_file(const char* path);
+void log_close_file();
+void log_set_file(FILE* f);
 void log_msg(LogLevel lvl, const char* category, const char* fmt, ...)
 #if defined(__MINGW32__) && !defined(__clang__)
     __attribute__((format(gnu_printf, 3, 4)))

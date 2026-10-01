@@ -54,6 +54,9 @@ const int kLfoPeriod[8] = {108, 77, 71, 67, 62, 44, 8, 5};
 const double kPmCents[8] = {0, 3.4, 6.7, 10, 14, 20, 40, 80};
 const int kAmShift[4] = {8, 3, 1, 0};
 
+// DAC zero-crossing discontinuity, in 9-bit DAC steps.
+constexpr int32_t kLadderStep = 7;
+
 inline int keycode(uint16_t fnum, uint8_t block) {
     int n4 = (fnum >> 10) & 1, n3 = (fnum >> 9) & 1, n2 = (fnum >> 8) & 1, n1 = (fnum >> 7) & 1;
     int note = (n4 << 1) | ((n4 & (n3 | n2 | n1)) | ((n4 ^ 1) & n3 & n2 & n1));
@@ -337,11 +340,15 @@ void Ym2612::generate(int samples, std::vector<int16_t>& out) {
             if (c == 5 && dac_en_) acc = dac_;
             acc = std::clamp(acc, -8192, 8191);
             int32_t v = acc >> 5;  // 9-bit DAC
+            // The discrete YM2612 of the Model 1 has a step in its DAC at the
+            // zero crossing (the "ladder effect"), which gives quiet notes
+            // their harder edge. Same size as PicoDrive's YM2612 mode.
+            if (acc < 0) v -= kLadderStep;
             if (ch.left) left += v;
             if (ch.right) right += v;
         }
-        out.push_back(int16_t(std::clamp(left * 12, -32768, 32767)));
-        out.push_back(int16_t(std::clamp(right * 12, -32768, 32767)));
+        out.push_back(int16_t(std::clamp(left * 28, -32768, 32767)));
+        out.push_back(int16_t(std::clamp(right * 28, -32768, 32767)));
     }
 }
 

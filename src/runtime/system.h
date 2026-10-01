@@ -287,6 +287,9 @@ public:
     uint8_t z80_bus_read(uint16_t a);
     void z80_bus_write(uint16_t a, uint8_t v);
     void set_z80_reset(bool held);
+    void set_z80_busreq(bool requested);
+    // Runs the Z80 up to `mclk`, unless it is held in reset or off the bus.
+    void z80_catch_up(uint64_t mclk);
 private:
 
     // Per-instance bus glue and time-slice bookkeeping (no globals, so several
