@@ -41,6 +41,12 @@ void z80_out(void*, uint16_t, uint8_t) {}
 } // namespace
 
 Machine::Machine() {
+    // reset() sets these up for a run; a machine that is only inspected (the
+    // tests) must not start with whatever the heap held before.
+    std::memset(wram, 0, sizeof wram);
+    std::memset(sdram, 0, sizeof sdram);
+    std::memset(zram, 0, sizeof zram);
+    std::memset(fb_margin, 0, sizeof fb_margin);
     std::memset(sram, 0xFF, sizeof sram);
     exec.m68k_block = m68k::interp_block;
     exec.sh2_block = sh2::interp_block;
@@ -62,6 +68,15 @@ void Machine::load_rom(Rom&& r) {
         LOGW("rom", "unrecognised ROM (sha1 %s); continuing, but behaviour is unverified", rom.sha1.c_str());
     else
         LOGI("rom", "%s (sha1 %s)", rom_version_name(rom.version), rom.sha1.c_str());
+}
+
+void Machine::rebind() {
+    vdp.host.user = this;
+    z80.bus.user = this;
+    m68k.irq_user = this;
+    if (m68k.hook) m68k.hook_user = this;
+    remap_m68k();
+    remap_sh2();
 }
 
 void Machine::reset() {
@@ -256,8 +271,9 @@ void Machine::run_slice(uint64_t end_mclk) {
         ProfScope ps(profile, &stats.prof_ns[c ? PROF_SSH2 : PROF_MSH2]);
         sh2::State& s = sh2[c];
         int32_t budget = int32_t(sh_target - sh2_clock[c]);
-        s.cycles = budget;
-        sh2_slice_[c] = SliceInfo{true, sh2_clock[c], budget};
+        int32_t eff_budget = (sh2_speed_multiplier <= 100) ? budget : int32_t(int64_t(budget) * sh2_speed_multiplier / 100);
+        s.cycles = eff_budget;
+        sh2_slice_[c] = SliceInfo{true, sh2_clock[c], eff_budget};
         while (s.cycles > 0) {
             sh2::check_irq(&s);
             if (s.sleeping) { s.cycles = 0; break; }
@@ -265,10 +281,9 @@ void Machine::run_slice(uint64_t end_mclk) {
             exec.sh2_block(&s);
         }
         sh2_slice_[c].running = false;
-        uint64_t done = uint64_t(int64_t(budget) - s.cycles);
-        sh2_clock[c] += done;
-        (c ? stats.ssh2_cycles : stats.msh2_cycles) += done;
-        onchip_advance(c, uint32_t(done));
+        sh2_clock[c] = sh_target;
+        (c ? stats.ssh2_cycles : stats.msh2_cycles) += budget;
+        onchip_advance(c, uint32_t(budget));
     }
     uint64_t start = mclk;
     mclk = end_mclk;
@@ -351,20 +366,64 @@ void Machine::render_output_line(int src_line, int dst_row) {
     render_line32x(src_line, row, extra, wide_active);
     // Merge: render_line32x marks 32X pixels that should be shown with
     // alpha 0xFE; 0xFD means "only where the MD pixel is the backdrop".
+    // Scenes without widescreen support get black side bars. In a level, the
+    // margin columns outside the level's camera range are blacked out too,
+    // except for 32X pixels when the HUD has moved into the margin.
+    patches::MarginCut cut{0, 0};
+    if (extra) cut = wide_active ? patches::margin_cut(*this, extra) : patches::MarginCut{extra, extra};
+    const bool keep32x = wide_active && wide_hud_edge;
     for (int x = 0; x < n; ++x) {
         uint32_t p = row[x];
         bool show32x = (p >> 24) == 0xFE;
         bool mdbg = bg[x] != 0;
-        if (show32x || ((p >> 24) == 0xFD && mdbg)) row[x] = 0xFF000000u | (p & 0xFFFFFF);
+        if (x < cut.left || x >= n - cut.right) row[x] = keep32x && show32x ? 0xFF000000u | (p & 0xFFFFFF) : 0xFF000000u;
+        else if (show32x || ((p >> 24) == 0xFD && mdbg)) row[x] = 0xFF000000u | (p & 0xFFFFFF);
         else row[x] = md[x];
     }
     if (extra) {
-        // Scenes without widescreen support: black side bars. In a level,
-        // black out margin columns outside the level's camera range.
-        patches::MarginCut cut{extra, extra};
-        if (wide_active) cut = patches::margin_cut(*this, extra);
-        for (int x = 0; x < cut.left; ++x) row[x] = 0xFF000000u;
-        for (int x = 0; x < cut.right; ++x) row[n - 1 - x] = 0xFF000000u;
+
+        if (wide_active && rom.version != RomVersion::ChaotixJUE) {
+            if (edge_blend_mode == EdgeBlendMode::SoftFeather && extra >= 16) {
+                constexpr int kFeather = 16;
+                for (int i = 0; i < kFeather; ++i) {
+                    int xl = extra + i;
+                    uint32_t c32_l = row[xl], cmd_l = md[xl];
+                    float tl = float(i + 1) / float(kFeather);
+                    uint8_t rl = uint8_t((1.0f - tl) * ((cmd_l >> 16) & 0xFF) + tl * ((c32_l >> 16) & 0xFF));
+                    uint8_t gl = uint8_t((1.0f - tl) * ((cmd_l >> 8) & 0xFF) + tl * ((c32_l >> 8) & 0xFF));
+                    uint8_t bl = uint8_t((1.0f - tl) * (cmd_l & 0xFF) + tl * (c32_l & 0xFF));
+                    row[xl] = 0xFF000000u | (rl << 16) | (gl << 8) | bl;
+
+                    int xr = extra + 320 - 1 - i;
+                    uint32_t c32_r = row[xr], cmd_r = md[xr];
+                    float tr = float(i + 1) / float(kFeather);
+                    uint8_t rr = uint8_t((1.0f - tr) * ((cmd_r >> 16) & 0xFF) + tr * ((c32_r >> 16) & 0xFF));
+                    uint8_t gr = uint8_t((1.0f - tr) * ((cmd_r >> 8) & 0xFF) + tr * ((c32_r >> 8) & 0xFF));
+                    uint8_t br = uint8_t((1.0f - tr) * (cmd_r & 0xFF) + tr * (c32_r & 0xFF));
+                    row[xr] = 0xFF000000u | (rr << 16) | (gr << 8) | br;
+                }
+            } else if (edge_blend_mode == EdgeBlendMode::Vignette) {
+                for (int x = 0; x < extra; ++x) {
+                    float f = float(x) / float(extra);
+                    uint32_t c = row[x];
+                    uint8_t r = uint8_t(((c >> 16) & 0xFF) * f);
+                    uint8_t g = uint8_t(((c >> 8) & 0xFF) * f);
+                    uint8_t b = uint8_t((c & 0xFF) * f);
+                    row[x] = 0xFF000000u | (r << 16) | (g << 8) | b;
+                }
+                for (int x = n - extra; x < n; ++x) {
+                    float f = float(n - 1 - x) / float(extra);
+                    uint32_t c = row[x];
+                    uint8_t r = uint8_t(((c >> 16) & 0xFF) * f);
+                    uint8_t g = uint8_t(((c >> 8) & 0xFF) * f);
+                    uint8_t b = uint8_t((c & 0xFF) * f);
+                    row[x] = 0xFF000000u | (r << 16) | (g << 8) | b;
+                }
+            } else if (edge_blend_mode == EdgeBlendMode::DarkPillars) {
+                for (int x = 0; x < extra; ++x) row[x] = 0xFF000000u;
+                for (int x = n - extra; x < n; ++x) row[x] = 0xFF000000u;
+            }
+        }
     }
 }
 

@@ -32,6 +32,13 @@ constexpr int kScreenHeight = 224 + 16;  // active lines + widescreen rows (patc
 constexpr int kMclkPerAudioSample = 1008;  // YM2612 native rate: MCLK / 7 / 144
 constexpr double kAudioRate = 53693175.0 / kMclkPerAudioSample;
 
+enum class EdgeBlendMode : uint8_t {
+    None = 0,
+    SoftFeather = 1,
+    Vignette = 2,
+    DarkPillars = 3
+};
+
 // SH-2 on-chip peripherals (per CPU).
 struct Sh2OnChip {
     // Interrupt controller
@@ -151,6 +158,9 @@ public:
     // VRAM, so machines compared in lockstep must use the same value.
     int wide_extra = 0;
     int wide_extra_bottom = 0;  // extra rows below the screen (see patches.h)
+    // Widescreen levels: draw the HUD at the left edge of the wide image
+    // rather than where the 4:3 picture would have it (patches.h).
+    bool wide_hud_edge = false;
     int plane_shift = 0;               // W latched by the plane streaming patch
     uint64_t level_seen_frame = ~0ull; // last frame the level engine ran (patches.cpp)
     bool wide_active = false;          // margins show game content this frame
@@ -209,6 +219,8 @@ public:
     CpuExecutors exec;
     FrameStats stats;
     bool profile = false;
+    int sh2_speed_multiplier = 100;  // 100 = 1.0x (stock), 150 = 1.5x, 200 = 2.0x
+    EdgeBlendMode edge_blend_mode = EdgeBlendMode::None;
 
     // Self-modification tracking for RAM-resident recompiled SH-2 code.
     // Ranges are byte offsets into SDRAM / the cache data array.
@@ -242,6 +254,10 @@ public:
     void update_sh2_irq(int cpu);
     void remap_m68k();
     void remap_sh2();
+    // Points everything that holds this machine's address back at it. A
+    // machine assigned from another one (a snapshot, a save state) still
+    // refers to that one until this is called.
+    void rebind();
     uint64_t m68k_now_mclk() const;
     uint64_t sh2_now_mclk(int cpu) const;
     int hpos_mclk() const;  // position in current line for 68K observers
