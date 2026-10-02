@@ -458,3 +458,50 @@ TEST(menu, the_binding_page_says_what_each_button_does) {
     CHECK(select_row(m, "BACK"));
     CHECK(m.selected_note().empty());
 }
+
+TEST(menu, states_save_and_load_the_chosen_slot) {
+    Config cfg;
+    cfg.set_defaults();
+    Menu m;
+    m.bind(cfg);
+    int saved = 0, loaded = 0;
+    Menu::Hooks h;
+    h.save_state = [&saved](int slot) { saved = slot; return true; };
+    h.load_state = [&loaded](int slot) { loaded = slot; return true; };
+    h.state_label = [](int slot) { return slot == 2 ? std::string("2026-10-01 12:00") : std::string("EMPTY"); };
+    m.set_hooks(h);
+
+    m.toggle();
+    CHECK(select_row(m, "STATES"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK_STR(m.page_name(), "states");
+    // Each slot says what it holds before anything is chosen.
+    CHECK(select_row(m, "SAVE SLOT 2"));
+    CHECK_STR(m.selected_note(), "2026-10-01 12:00");
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK_EQ(saved, 2);
+    CHECK(!m.open());  // back to the game
+
+    m.toggle();
+    CHECK(select_row(m, "STATES"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK(select_row(m, "LOAD SLOT 3"));
+    CHECK_STR(m.selected_note(), "EMPTY");
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK_EQ(loaded, 3);
+    CHECK(!m.open());
+}
+
+TEST(menu, a_failed_state_action_keeps_the_page_open) {
+    Config cfg;
+    cfg.set_defaults();
+    Menu m;
+    m.bind(cfg);
+    Menu::Hooks h;
+    h.load_state = [](int) { return false; };  // an empty slot, say
+    m.set_hooks(h);
+    CHECK(m.show_page("states"));
+    CHECK(select_row(m, "LOAD SLOT 1"));
+    CHECK(m.on_key(SDLK_RETURN));
+    CHECK_STR(m.page_name(), "states");
+}

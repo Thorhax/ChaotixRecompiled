@@ -37,8 +37,18 @@ This folder contains platform assets and documentation for the Nintendo Switch h
 | **L** | Button Y | 6-Button Pad |
 | **R** | Button Z | 6-Button Pad |
 | **Plus (+)** | Start | Pause / Start Game |
-| **Minus (-)** | Mode / Menu | Opens in-game settings & achievements |
+| **Minus (-)** | Mode / Menu | Opens in-game settings, save states & achievements |
 | **Touchscreen** | Virtual On-Screen Controls | Enabled in handheld mode |
+
+---
+
+## 💾 Save States
+
+Press **Minus (-)** for the pause menu and choose **STATES**: **SAVE SLOT 1–3** and **LOAD SLOT 1–3**. Each slot shows when it was saved. States are stored in `sdmc:/switch/chaotix/States/` and only load with the same ROM and version of the port.
+
+## 🖥️ Widescreen HUD
+
+In widescreen levels the SCORE / TIME / RINGS display sits at the left edge of the screen. To keep it where the original 4:3 picture has it, turn off **Options → HUD AT EDGE**.
 
 ---
 

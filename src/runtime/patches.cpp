@@ -21,6 +21,12 @@ void m68k_hook(m68k::State* c, uint32_t pc) {
     case kPlaneUpdateB:
         m->level_seen_frame = m->frame_count;
         return;
+    case kPauseLoop:
+        // Paused in a level: the planes stop updating, but the level is still
+        // what is on screen, so it stays wide.
+        if (m->level_seen_frame != ~0ull && m->level_seen_frame + 8 >= m->frame_count)
+            m->level_seen_frame = m->frame_count;
+        return;
     case kModeDispatch:
         // The game is between scenes: a stage the host asked for can start.
         if (m->stage_pending) {
@@ -87,6 +93,23 @@ void m68k_hook(m68k::State* c, uint32_t pc) {
     }
 }
 
+// HUD X: the immediate byte of each `mov #32,r1` (E1 20) in the master SH-2's
+// HUD routine (SDRAM 0x0C9C; one per row, both layouts). Written only where
+// the instruction is found, so other scenes' SDRAM is never touched.
+constexpr uint32_t kHudXImm[] = {0x0CA3, 0x0CAD, 0x0CB5, 0x0CC1, 0x0CCB};
+constexpr uint8_t kHudX = 32;
+
+void set_hud_x(Machine& m, int x) {
+    bool changed = false;
+    for (uint32_t a : kHudXImm) {
+        if (m.sdram[a - 1] != 0xE1) continue;
+        if (m.sdram[a] != uint8_t(x)) { m.sdram[a] = uint8_t(x); changed = true; }
+    }
+    // The routine is recompiled: make the dispatcher check it again, so the
+    // moved HUD runs interpreted and the original runs native.
+    if (changed) ++m.sdram_code_epoch;
+}
+
 void write_clip(Machine& m, int16_t left, int16_t right) {
     uint8_t* p = m.sdram + kClipRectSdram;
     p[0] = uint8_t(uint16_t(left) >> 8);
@@ -142,6 +165,8 @@ void begin_frame(Machine& m) {
         write_clip(m, int16_t((r[0] << 8) | r[1]), int16_t((r[2] << 8) | r[3]));
         m.clip_overridden = false;
     }
+    // Even, so the HUD keeps the native image's word alignment.
+    set_hud_x(m, m.wide_active && m.wide_hud_edge ? kHudX - (e & ~1) : kHudX);
 }
 
 void install(Machine& m) {

@@ -39,7 +39,14 @@ public:
         // Starts a level straight away, the way the game's own stage select
         // would: TIME ATTACK.
         std::function<void(const stage_select::Request&)> start_stage;
+        // Save states, by slot (1-based). Each returns true on success; the
+        // label says what the slot holds ("EMPTY", or when it was saved).
+        std::function<bool(int slot)> save_state;
+        std::function<bool(int slot)> load_state;
+        std::function<std::string(int slot)> state_label;
     };
+
+    static constexpr int kStateSlots = 3;
 
     void set_hooks(Hooks h) { hooks_ = std::move(h); }
     // The settings the options page edits. Must outlive the menu.
@@ -50,7 +57,7 @@ public:
     void open_front();
     void toggle();
     void show_achievements();
-    // For screenshots and tests: "main", "options" or "awards".
+    // For screenshots and tests: "main", "options", "states" or "awards".
     bool show_page(const std::string& name);
     std::string page_name() const;
     // The highlighted entry's label, empty when the page has no entries.
@@ -73,7 +80,7 @@ public:
     void draw_backdrop_dim(ui::Ui& g) const;
 
 private:
-    enum class Page { Closed, Front, Main, Options, Controls, Keys, TimeAttack, Achievements };
+    enum class Page { Closed, Front, Main, Options, Controls, Keys, TimeAttack, States, Achievements };
 
     struct Item {
         std::string label;
@@ -100,6 +107,7 @@ private:
     void build_options();
     void build_controls();
     void build_time_attack();
+    void build_states();
     void build_keys();
     void move(int delta);
     void activate(int step);

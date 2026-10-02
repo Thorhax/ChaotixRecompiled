@@ -14,6 +14,7 @@
 #include "runtime/log.h"
 #include "runtime/patches.h"
 #include "frontend/time_attack.h"
+#include "runtime/savestate.h"
 #include "runtime/system.h"
 #include <chrono>
 #include <cstdio>
@@ -161,6 +162,11 @@ int main(int argc, char** argv) {
     int hash_failures = 0;
     std::vector<Press> presses;
     uint64_t state_every = 0, hash_every = 0;
+    // --savestate-check FRAME: save at the end of FRAME, load it into a fresh
+    // interpreter machine and require it to stay identical to this one.
+    uint64_t savestate_frame = 0;
+    bool hud_edge = false;  // --hud-edge: widescreen HUD at the left edge
+    bool savestate_check = false;
     bool force_interp = false;
     bool lockstep = false;
     bool profile = false;
@@ -249,6 +255,7 @@ int main(int argc, char** argv) {
             }
         }
         else if (a == "--state-every") state_every = std::strtoull(next().c_str(), nullptr, 10);
+        else if (a == "--savestate-check") { savestate_frame = std::strtoull(next().c_str(), nullptr, 10); savestate_check = true; }
         else if (a == "--hash-every") hash_every = std::strtoull(next().c_str(), nullptr, 10);
         else if (a == "--expect-hashes") {
             // File of "hash FRAME HASH" lines (as printed by --hash-every).
@@ -263,6 +270,7 @@ int main(int argc, char** argv) {
         else if (a == "--profile") profile = true;
         else if (a == "--wide") wide = std::atoi(next().c_str());
         else if (a == "--wide-bottom") wide_bottom = std::atoi(next().c_str());
+        else if (a == "--hud-edge") hud_edge = true;
         else if (a == "--compare-native") compare_native = true;
         else if (a == "--achievements" && i + 1 < argc) achievements_file = next();
         else if (a == "--min-centre-frames") min_centre_frames = std::strtoull(next().c_str(), nullptr, 10);
@@ -351,6 +359,7 @@ int main(int argc, char** argv) {
     m->profile = profile;
     m->wide_extra = wide;
     m->wide_extra_bottom = wide_bottom;
+    m->wide_hud_edge = hud_edge;
     if (six_button >= 0) m->input.six_button[0] = m->input.six_button[1] = six_button != 0;
     if (!sram_path.empty()) {
         // Cartridge saves change what the game does, so a replay of somebody
@@ -376,6 +385,7 @@ int main(int argc, char** argv) {
         ref->reset();
         ref->wide_extra = wide;
         ref->wide_extra_bottom = wide_bottom;
+        ref->wide_hud_edge = hud_edge;
         if (!rs.active) std::printf("warning: --lockstep without generated code compares the interpreter with itself\n");
     }
     // The 4:3 comparison machine runs on the interpreter: the recompiled
@@ -391,6 +401,8 @@ int main(int argc, char** argv) {
     }
     uint64_t centre_ok_frames = 0;
     uint64_t lockstep_ok_frames = 0;
+    std::unique_ptr<Machine> loaded;  // --savestate-check
+    uint64_t savestate_ok_frames = 0;
     CoverageRecorder cov;
     if (!coverage_path.empty()) cov.attach(*m);
     // Block-level history ring for --break (per CPU).
@@ -536,6 +548,33 @@ int main(int argc, char** argv) {
             }
             ++lockstep_ok_frames;
         }
+        if (loaded) {
+            loaded->input.pad[0] = btn;
+            loaded->input.pad[1] = btn2;
+            loaded->run_frame();
+            std::string diff = compare_machines(*loaded, *m);
+            if (!diff.empty()) {
+                std::printf("SAVESTATE DIVERGENCE at frame %llu (loaded vs original): %s\n", (unsigned long long)m->frame_count, diff.c_str());
+                return 3;
+            }
+            ++savestate_ok_frames;
+        }
+        if (savestate_check && f == savestate_frame) {
+            const std::vector<uint8_t> state = savestate::save(*m);
+            loaded = std::make_unique<Machine>();
+            loaded->load_rom(rom_path, &err);
+            loaded->reset();
+            loaded->wide_extra = m->wide_extra;
+            loaded->wide_extra_bottom = m->wide_extra_bottom;
+            loaded->wide_hud_edge = m->wide_hud_edge;
+            loaded->input = m->input;
+            std::string why;
+            if (!savestate::load(*loaded, state, &why)) {
+                std::printf("savestate: load failed: %s\n", why.c_str());
+                return 3;
+            }
+            std::printf("savestate: saved at frame %llu (%zu bytes)\n", (unsigned long long)f, state.size());
+        }
         if (nat && centre_compare) {
             nat->input.pad[0] = btn;
             nat->run_frame();
@@ -602,6 +641,7 @@ int main(int argc, char** argv) {
         return 5;
     }
     if (compare_native) std::printf("centre check: %llu widescreen frames with a 4:3 identical centre\n", (unsigned long long)centre_ok_frames);
+    if (loaded) std::printf("savestate: %llu frames after loading identical to the original\n", (unsigned long long)savestate_ok_frames);
     if (ref) std::printf("lockstep: %llu frames bit-identical between interpreter and recompiled execution\n", (unsigned long long)lockstep_ok_frames);
     if (!coverage_path.empty()) {
         if (cov.save(coverage_path)) std::printf("coverage written to %s (%zu entries)\n", coverage_path.c_str(), cov.size());

@@ -24,6 +24,14 @@ draw real tiles, objects and sprites in the extra area, rather than stretching
 or cropping a 4:3 image. Anything from 1.24:1 (320×240) to 2:1 (480×224) is
 filled — 426×224 at 16:9 — and the centre 320 pixels stay bit-identical to the
 unmodified game, which is checked by a test. Scenes outside levels stay 4:3.
+With **HUD AT EDGE** (Options, on by default) the SCORE/TIME/RINGS display
+moves to the left edge of the wide image instead; turn it off to keep the
+centre exactly as the original draws it.
+
+**Save states**: the pause menu's STATES page saves and loads three slots
+(stored under `States/` in the app's folder). A state only loads with the same
+ROM and version; a test checks that a loaded state runs on identically to the
+machine it was saved from.
 
 | Platform | State |
 |---|---|

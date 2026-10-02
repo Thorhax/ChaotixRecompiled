@@ -6,6 +6,7 @@ add_executable(chaotix_tests
     test_ym2612.cpp
     test_psg.cpp
     test_z80_bus.cpp
+    test_savestate.cpp
     test_m68k.cpp
     test_sh2.cpp
     test_viewport.cpp
@@ -73,6 +74,29 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
         COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3200 --wide 53 ${_script}
                 --expect-hash 2800:${CHAOTIX_GOLDEN_169_A} --expect-hash 3200:${CHAOTIX_GOLDEN_169_B})
     set_tests_properties(lockstep_boot_to_level golden_frames lockstep_widescreen golden_frames_widescreen golden_frames_16_9 widescreen_centre_matches_4_3 PROPERTIES TIMEOUT 900)
+    # The HUD at the edge of the wide image: the SDRAM patch runs the same in
+    # the interpreter and the recompiled code, and the frame is stable.
+    add_test(NAME lockstep_widescreen_hud_edge
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3200 --wide 53 --hud-edge --lockstep ${_script})
+    add_test(NAME golden_frames_hud_edge
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 2801 --wide 53 --hud-edge ${_script}
+                --expect-hash 2800:${CHAOTIX_GOLDEN_169_HUD})
+    set_tests_properties(lockstep_widescreen_hud_edge golden_frames_hud_edge PROPERTIES TIMEOUT 900)
+    # Pausing a level keeps it wide: the plane update stops while paused, and
+    # the pause loop hook keeps the level counted as on screen.
+    add_test(NAME widescreen_stays_while_paused
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3101 --wide 53
+                --press 1750:start:5 --press 1950:start:5 --press 2300:start:5
+                --press 2600:right:200 --press 2750:c:10 --press 2900:start:6
+                --expect-hash 3100:${CHAOTIX_GOLDEN_169_PAUSE})
+    set_tests_properties(widescreen_stays_while_paused PROPERTIES TIMEOUT 900)
+    # Save states: a state saved mid-level and loaded into a fresh machine runs
+    # on identically to the machine it came from, widescreen patches included.
+    add_test(NAME savestate_resumes_identically
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 3200 --wide 53 --hud-edge ${_script}
+                --savestate-check 2700)
+    set_tests_properties(savestate_resumes_identically PROPERTIES TIMEOUT 900
+        PASS_REGULAR_EXPRESSION "savestate: 499 frames after loading identical to the original")
 
     # The shipped achievement definitions must still unlock while the attract
     # demos play (a definition that never fires is silent otherwise).

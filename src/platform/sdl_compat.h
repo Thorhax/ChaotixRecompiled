@@ -39,6 +39,11 @@ using SDL_IOStream = SDL_RWops;
 #define SDL_EVENT_GAMEPAD_BUTTON_DOWN   SDL_CONTROLLERBUTTONDOWN
 #define SDL_EVENT_GAMEPAD_BUTTON_UP     SDL_CONTROLLERBUTTONUP
 
+// SDL3 key names, so shared code is written once in SDL3's spelling.
+#define SDLK_R       SDLK_r
+#define SDLK_O       SDLK_o
+#define SDL_KMOD_ALT KMOD_ALT
+
 #define gbutton cbutton
 #define gdevice cdevice
 #define fingerID fingerId

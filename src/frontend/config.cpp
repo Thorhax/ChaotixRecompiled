@@ -86,6 +86,7 @@ bool Config::load(const std::string& path) {
             } else if (k == "WindowScale") window_scale = std::max(1, std::atoi(v.c_str()));
             else if (k == "VSync") vsync = parse_bool(v, vsync);
             else if (k == "Widescreen") widescreen = parse_bool(v, widescreen);
+            else if (k == "HudAtEdge") hud_at_edge = parse_bool(v, hud_at_edge);
         } else if (section == "Achievements") {
             if (k == "Enabled") achievements = parse_bool(v, achievements);
         } else if (section == "Audio") {
@@ -132,6 +133,9 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "# true: levels render extra columns (or rows, for frames taller than 4:3) to fill\n");
     std::fprintf(f, "# the aspect ratio, from 1.24:1 (320x240) to 2:1 (480x224); false: original 4:3\n");
     std::fprintf(f, "Widescreen = %s\n", widescreen ? "true" : "false");
+    std::fprintf(f, "# true: in widescreen levels the HUD sits at the left edge of the wide image;\n");
+    std::fprintf(f, "# false: where the original 4:3 picture has it\n");
+    std::fprintf(f, "HudAtEdge = %s\n", hud_at_edge ? "true" : "false");
     std::fprintf(f, "# Integer | Fit | Stretch\nScaling = %s\n", scale_name(viewport.scale));
     std::fprintf(f, "# Nearest | Linear\nFilter = %s\n", linear_filter ? "Linear" : "Nearest");
     std::fprintf(f, "# Windowed | Borderless | Fullscreen\nWindowMode = %s\n", window_mode_name(window_mode));

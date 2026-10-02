@@ -24,6 +24,7 @@ struct Config {
     int window_scale = 3;
     bool vsync = true;
     bool widescreen = true;  // true widescreen in levels (margins follow AspectRatio)
+    bool hud_at_edge = true;  // widescreen levels: HUD at the left edge of the wide image
     bool achievements = true;  // local achievement tracking (assets/achievements.ini)
     // [Audio]
     bool audio = true;

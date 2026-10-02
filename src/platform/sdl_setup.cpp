@@ -245,10 +245,10 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
                 case SDLK_DOWN:
                     if (st.selected + 1 < int(st.candidates.size())) ++st.selected;
                     break;
-                case SDLK_r:
+                case SDLK_R:
                     st.rescan = true;
                     break;
-                case SDLK_o:
+                case SDLK_O:
                     browse();
                     break;
                 case SDLK_RETURN:

@@ -26,6 +26,7 @@
 #include "runtime/log.h"
 #include "runtime/patches.h"
 #include "runtime/save.h"
+#include "runtime/savestate.h"
 #include "runtime/system.h"
 
 #if defined(__SWITCH__)
@@ -52,6 +53,7 @@ extern "C" void userAppExit(void)
 #include <map>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -434,15 +436,76 @@ void draw_toasts(App& app) {
     }
 }
 
-void add_cheat_toast(App& app, const std::string& title) {
+// A short notice in the corner. One per category: a newer one replaces it.
+void show_notice(App& app, const char* category, const std::string& title) {
     for (auto& t : app.toasts) {
-        if (t.category == "CHEAT ACTIVATED") {
+        if (t.category == category) {
             t.title = title;
             t.until_ms = SDL_GetTicks() + 3000;
             return;
         }
     }
-    app.toasts.push_back({title, "", SDL_GetTicks() + 3000, "CHEAT ACTIVATED"});
+    app.toasts.push_back({title, "", SDL_GetTicks() + 3000, category});
+}
+
+void add_cheat_toast(App& app, const std::string& title) { show_notice(app, "CHEAT ACTIVATED", title); }
+
+std::string state_path(const App& app, int slot) {
+    return app.store.states_dir() + "slot" + std::to_string(slot) + ".state";
+}
+
+// When the slot was saved, for the menu: "EMPTY" if it never was.
+std::string state_label(const App& app, int slot) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path p = state_path(app, slot);
+    const auto ft = fs::last_write_time(p, ec);
+    if (ec) return "EMPTY";
+    const auto st = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        ft - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+    const std::time_t t = std::chrono::system_clock::to_time_t(st);
+    char buf[32] = "SAVED";
+    if (const std::tm* tm = std::localtime(&t)) std::strftime(buf, sizeof buf, "%Y-%m-%d %H:%M", tm);
+    return buf;
+}
+
+bool save_state_slot(App& app, int slot) {
+    if (!app.m || !app.handed_over) {
+        show_notice(app, "SAVE STATE", "Start the game first");
+        return false;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(app.store.states_dir(), ec);
+    std::string err;
+    if (!savestate::save_file(*app.m, state_path(app, slot), &err)) {
+        LOGW("state", "slot %d: %s", slot, err.c_str());
+        show_notice(app, "SAVE STATE", "Could not save: " + err);
+        return false;
+    }
+    show_notice(app, "SAVE STATE", "Saved to slot " + std::to_string(slot));
+    return true;
+}
+
+bool load_state_slot(App& app, int slot) {
+    if (!app.m) return false;
+    // BACK TO TITLE needs the title screen it returns to; a state loaded
+    // before the game was ever started keeps the one running now.
+    const bool keep_title = !app.handed_over;
+    std::unique_ptr<Machine> title;
+    if (keep_title) title = std::make_unique<Machine>(*app.m);
+    std::string err;
+    if (!savestate::load_file(*app.m, state_path(app, slot), &err)) {
+        show_notice(app, "LOAD STATE", "Slot " + std::to_string(slot) + ": " + err);
+        return false;
+    }
+    if (keep_title) app.title_snapshot = std::move(title);
+    app.handed_over = true;
+    // Nothing the host was doing to the game before carries over.
+    app.inject_start = 0;
+    app.stage_kick = -1;
+    app.ta.cancel();
+    show_notice(app, "LOAD STATE", "Loaded slot " + std::to_string(slot));
+    return true;
 }
 
 void save_screenshot(App& app) {
@@ -472,14 +535,21 @@ bool return_to_title(App& app) {
     app.m->stage_pending = false;
     app.stage_kick = -1;
     app.ta.cancel();
-    app.m->remap_m68k();
-    app.m->remap_sh2();
+    app.m->rebind();
     app.handed_over = false;
     return true;
 }
 
 // Escape, and the pad button standing in for it. Before the game has been
 // handed control this is the front end; afterwards it is the pause menu.
+// The game is the player's from here: keep the title screen for BACK TO
+// TITLE, and let the menu button open the pause menu from now on.
+void hand_over(App& app) {
+    if (!app.title_snapshot) app.title_snapshot = std::make_unique<Machine>();
+    *app.title_snapshot = *app.m;
+    app.handed_over = true;
+}
+
 void menu_back(App& app) {
     if (app.menu.open()) { app.menu.close(); return; }
     if (app.handed_over) app.menu.toggle(); else app.menu.open_front();
@@ -590,7 +660,7 @@ void handle_key(App& app, const SDL_KeyboardEvent& k) {
         apply_window_mode(app);
         break;
     case SDLK_RETURN:
-        if (mod & (KMOD_ALT)) {
+        if (mod & SDL_KMOD_ALT) {
             app.cfg.window_mode = app.cfg.window_mode == WindowMode::Windowed ? WindowMode::Borderless : WindowMode::Windowed;
             apply_window_mode(app);
         }
@@ -797,9 +867,7 @@ int main(int argc, char** argv) {
             // Keep the title screen so BACK TO TITLE can return to it, then
             // give the game the Start it is waiting for: it proceeds into its
             // own menus exactly as it would have without us in the way.
-            if (!app.title_snapshot) app.title_snapshot = std::make_unique<Machine>();
-            *app.title_snapshot = *app.m;
-            app.handed_over = true;
+            hand_over(app);
             app.inject_start = 8;
         };
         hooks.start_stage = [&app](const stage_select::Request& r) {
@@ -837,6 +905,9 @@ int main(int argc, char** argv) {
             std::error_code ec;
             std::filesystem::remove(achievements_progress_path(app), ec);
         };
+        hooks.save_state = [&app](int slot) { return save_state_slot(app, slot); };
+        hooks.load_state = [&app](int slot) { return load_state_slot(app, slot); };
+        hooks.state_label = [&app](int slot) { return state_label(app, slot); };
         app.menu.set_hooks(std::move(hooks));
     }
     // The menu is the front end, so it is up from the start: the game boots
@@ -1052,6 +1123,9 @@ int main(int argc, char** argv) {
             if (!h.armed && app.m->frame_count >= h.frame) { h.armed = true; h.remaining = int(h.frame ? h.remaining : h.remaining); }
             if (h.armed && h.remaining > 0) { raw |= h.buttons; --h.remaining; }
         }
+        // Closing the title menu (B, or the menu button) is a hand-over too:
+        // the player goes on through the game's own title screen instead.
+        if (!app.handed_over && !app.menu.open()) hand_over(app);
         if (!app.menu.open()) {
             // Touch belongs to player 1; the on-screen pad has no second set.
             raw |= device_buttons(app, 0) | touch_held;
@@ -1185,6 +1259,7 @@ int main(int argc, char** argv) {
             app.m->wide_extra = app.cfg.widescreen ? widescreen_extra(fa, patches::kMaxWideExtra) : 0;
             // A frame taller than 4:3 gets extra rows below instead.
             app.m->wide_extra_bottom = app.cfg.widescreen ? widescreen_rows(fa, patches::kMaxWideExtraBottom) : 0;
+            app.m->wide_hud_edge = app.cfg.hud_at_edge;
         }
         int steps = 0;
         const int max_steps = app.fast_forward ? 8 : 3;

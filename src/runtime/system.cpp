@@ -281,9 +281,19 @@ void Machine::run_slice(uint64_t end_mclk) {
             exec.sh2_block(&s);
         }
         sh2_slice_[c].running = false;
-        sh2_clock[c] = sh_target;
-        (c ? stats.ssh2_cycles : stats.msh2_cycles) += budget;
-        onchip_advance(c, uint32_t(budget));
+        if (sh2_speed_multiplier <= 100) {
+            // Stock speed: the clock advances by what actually ran, so a
+            // block that overshoots the slice is paid back in the next one.
+            const uint64_t done = uint64_t(int64_t(budget) - s.cycles);
+            sh2_clock[c] += done;
+            (c ? stats.ssh2_cycles : stats.msh2_cycles) += done;
+            onchip_advance(c, uint32_t(done));
+        } else {
+            // Overclocked: the extra cycles are free, emulated time is not.
+            sh2_clock[c] = sh_target;
+            (c ? stats.ssh2_cycles : stats.msh2_cycles) += budget;
+            onchip_advance(c, uint32_t(budget));
+        }
     }
     uint64_t start = mclk;
     mclk = end_mclk;

@@ -18,6 +18,7 @@ public:
     std::string config_dir() const { return root_ + "Config/"; }
     std::string mappings_dir() const { return root_ + "ControllerMappings/"; }
     std::string config_file() const { return config_dir() + "chaotix.ini"; }
+    std::string states_dir() const { return root_ + "States/"; }
 
     // Battery-backed cartridge RAM, keyed by ROM hash.
     bool load_sram(Machine& m) const;

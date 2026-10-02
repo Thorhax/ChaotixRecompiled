@@ -13,3 +13,5 @@ set(CHAOTIX_GOLDEN_WIDE_LEVEL "8b368d372ff3934f" CACHE STRING "Golden hash of fr
 # frames 2800 and 3200 with rings in the margins.
 set(CHAOTIX_GOLDEN_169_A "50b83820fd709815" CACHE STRING "Golden hash of frame 2800 at --wide 53")
 set(CHAOTIX_GOLDEN_169_B "d7ce2a41e46a0f50" CACHE STRING "Golden hash of frame 3200 at --wide 53")
+set(CHAOTIX_GOLDEN_169_HUD "ea52f7831c7d178f" CACHE STRING "Golden hash of frame 2800 at --wide 53 --hud-edge")
+set(CHAOTIX_GOLDEN_169_PAUSE "94e634838bd39e12" CACHE STRING "Golden hash of frame 3100 at --wide 53, paused at 2900")

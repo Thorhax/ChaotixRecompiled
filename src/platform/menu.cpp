@@ -38,7 +38,7 @@ bool Menu::is_row_page(Page p) { return p == Page::Main; }
 
 bool Menu::is_list_page(Page p) {
     return p == Page::Front || p == Page::Options || p == Page::Controls || p == Page::Keys ||
-           p == Page::TimeAttack;
+           p == Page::TimeAttack || p == Page::States;
 }
 
 void Menu::set_page(Page p) {
@@ -55,6 +55,7 @@ void Menu::set_page(Page p) {
     else if (p == Page::Controls) build_controls();
     else if (p == Page::Keys) build_keys();
     else if (p == Page::TimeAttack) build_time_attack();
+    else if (p == Page::States) build_states();
     else items_.clear();
 }
 
@@ -69,6 +70,7 @@ void Menu::show_achievements() { set_page(Page::Achievements); }
 bool Menu::show_page(const std::string& name) {
     if (name == "front") set_page(Page::Front);
     else if (name == "timeattack") set_page(Page::TimeAttack);
+    else if (name == "states") set_page(Page::States);
     else if (name == "controls") set_page(Page::Controls);
     else if (name == "keys1" || name == "keys2" || name == "pad1" || name == "pad2") {
         keys_pad_ = name.rfind("pad", 0) == 0;
@@ -90,6 +92,7 @@ std::string Menu::page_name() const {
     case Page::Controls: return "controls";
     case Page::Keys: return "keys";
     case Page::TimeAttack: return "timeattack";
+    case Page::States: return "states";
     case Page::Achievements: return "awards";
     default: return "";
     }
@@ -125,6 +128,7 @@ void Menu::build_front() {
 void Menu::build_main() {
     items_.clear();
     items_.push_back({"RESUME", {}, [this](int) { close(); }});
+    items_.push_back({"STATES", {}, [this](int) { set_page(Page::States); }});
     items_.push_back({"OPTIONS", {}, [this](int) { set_page(Page::Options); }});
     items_.push_back({"CONTROLS", {}, [this](int) { set_page(Page::Controls); }});
     items_.push_back({"AWARDS", {}, [this](int) { set_page(Page::Achievements); }});
@@ -245,6 +249,26 @@ void Menu::build_controls() {
 // TIME ATTACK: the fields the game's own stage select offers, in its order, so
 // the choices are the game's rather than an invention of ours. Everything is
 // kept in the settings file, so the same run can be set up again in one go.
+// Save and load, three slots each. The note beside a slot says what is in it,
+// so a load is never a guess. Either one closes the menu: the game goes on
+// from the state just saved or loaded.
+void Menu::build_states() {
+    items_.clear();
+    auto note = [this](int slot) { return hooks_.state_label ? hooks_.state_label(slot) : std::string(); };
+    for (int slot = 1; slot <= kStateSlots; ++slot)
+        items_.push_back({"SAVE SLOT " + std::to_string(slot), {},
+                          [this, slot](int) {
+                              if (hooks_.save_state && hooks_.save_state(slot)) close();
+                          },
+                          note(slot)});
+    for (int slot = 1; slot <= kStateSlots; ++slot)
+        items_.push_back({"LOAD SLOT " + std::to_string(slot), {},
+                          [this, slot](int) {
+                              if (hooks_.load_state && hooks_.load_state(slot)) close();
+                          },
+                          note(slot)});
+}
+
 void Menu::build_time_attack() {
     using namespace stage_select;
     items_.clear();
@@ -356,6 +380,9 @@ void Menu::build_options() {
     items_.push_back({"WIDESCREEN",
                       [c] { return on_off(c->widescreen); },
                       [c](int s) { if (s) c->widescreen = !c->widescreen; }});
+    items_.push_back({"HUD AT EDGE",
+                      [c] { return on_off(c->hud_at_edge); },
+                      [c](int s) { if (s) c->hud_at_edge = !c->hud_at_edge; }});
     items_.push_back({"ASPECT RATIO",
                       [c] { return std::string(kAspectNames[int(c->viewport.aspect)]); },
                       [c](int s) { if (s) cycle(c->viewport.aspect, 5, s); }});
@@ -562,7 +589,7 @@ void Menu::draw(ui::Ui& g, achievements::Tracker& ach) {
     else if (page_ == Page::Main)
         draw_row_page(g, "Left/Right choose    Enter select    Esc close");
     else if (page_ == Page::Options || page_ == Page::Controls || page_ == Page::Keys ||
-             page_ == Page::TimeAttack)
+             page_ == Page::TimeAttack || page_ == Page::States)
         draw_options(g);
     else
         draw_achievements(g, ach);
@@ -695,6 +722,7 @@ void Menu::draw_options(ui::Ui& g) {
             ui::theme::background.alpha(240), ui::theme::accent, g.px(4), g.px(3));
 
     const char* heading = page_ == Page::TimeAttack ? "TIME ATTACK"
+                        : page_ == Page::States ? "SAVE STATES"
                         : page_ == Page::Controls ? "CONTROLS"
                         : page_ == Page::Keys
                               ? (keys_player_ == 0 ? (keys_pad_ ? "1P GAMEPAD" : "1P KEYBOARD")
@@ -742,9 +770,9 @@ void Menu::draw_options(ui::Ui& g) {
         y += this_h;
     }
 
-    const char* hint = page_ == Page::Keys
-                           ? "Up/Down choose    Enter rebind    Esc back"
-                           : "Up/Down choose    Left/Right change    Esc back";
+    const char* hint = page_ == Page::Keys     ? "Up/Down choose    Enter rebind    Esc back"
+                     : page_ == Page::States ? "Up/Down choose    Enter select    Esc back"
+                                             : "Up/Down choose    Left/Right change    Esc back";
     g.text(ui::Font::Small, x, y + g.px(8), hint, ui::theme::text_faint);
 }
 

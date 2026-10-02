@@ -38,6 +38,10 @@ enum : uint32_t {
     // point the game passes through between scenes, so it is where a stage the
     // host asked for (runtime/stage_select.h) can be started.
     kModeDispatch = 0x883262,
+    // The level's pause loop (ROM 0x4DFE): waits for V-blank once per paused
+    // frame until Start. The plane update does not run while paused, so this
+    // keeps the level counted as on screen (see wide_scene_active).
+    kPauseLoop = 0x884DFE,
     kFullRedrawA = 0x8897AC,     // redraw 16 rows (unmasked X); latches W
     kFullRedrawB = 0x889810,     // redraw 16 rows (X masked by plane width); latches W
     kRowsA_X = 0x8897BE,         // after d0 = plane.x (full redraw A)
@@ -74,7 +78,7 @@ constexpr uint32_t kPlaneAStruct = 0xC1DE;
 
 // Sorted: the interpreter binary-searches this list.
 inline constexpr uint32_t kM68kHooks[] = {
-    kRingCullLo, kRingCullHi, kRingCullDone, kRingCullExit, kModeDispatch,
+    kRingCullLo, kRingCullHi, kRingCullDone, kRingCullExit, kModeDispatch, kPauseLoop,
     kFullRedrawA, kRowsA_X, kFullRedrawB, kRowsB_X, kPlaneUpdateA, kRowUpA_X, kRowDownA_X,
     kColLeftA_X, kColRightA_X, kPlaneUpdateB, kColLeftB_X, kColRightB_X, kRowUpB_X, kRowDownB_X,
     kCamClampMax, kCamClampMin, kCamClampBottom, kFillSplitX,
@@ -109,6 +113,15 @@ constexpr uint32_t kFbLineBase = 0x200;
 constexpr uint32_t kFbLineStride = 0x200;
 constexpr uint32_t kClipRectRom = 0x77800 + kClipRectSdram;
 
+// HUD (optional, Machine::wide_hud_edge). SCORE, TIME and RINGS are drawn by
+// the master SH-2's HUD command (SDRAM 0x0C9C), each row at an X loaded by an
+// immediate `mov #32,r1`. While a widescreen level is shown, those immediates
+// are rewritten to 32 - E (E rounded down to even) so the HUD keeps its
+// distance from the edge of the wide image; they are put back otherwise. The
+// dispatcher re-validates the routine after each change, so it runs
+// interpreted while moved (once per frame, no measurable cost). The margin
+// blackout keeps 32X pixels then, so the HUD stays visible at level edges.
+
 // Widest margin (px per side) the patches support: leaves the plane ring
 // (below) 16 px of slack on each side, one 16 px column step.
 constexpr int kMaxWideExtra = 80;
@@ -132,7 +145,8 @@ constexpr int plane_shift_for(int extra) { return extra > 0 ? 96 : 0; }
 constexpr uint8_t kLevelPlaneSize = 0x01;
 
 // A frame counts as a level scene when the level engine's per-frame plane
-// update ran in the last 8 frames (it skips a few while a level loads). Other
+// update (or the level's pause loop) ran in the last 8 frames (it skips a few
+// while a level loads). Other
 // scenes (title, menus, special stages) stay 4:3 with black side bars.
 bool wide_scene_active(const Machine& m);
 

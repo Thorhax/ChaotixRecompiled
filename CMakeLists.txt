@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ChaotixRecompiled VERSION 0.3.6 LANGUAGES C CXX)
+project(ChaotixRecompiled VERSION 0.3.7 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -42,6 +42,7 @@ add_library(chaotix_runtime STATIC
     src/runtime/vdp.cpp
     src/renderer/compositor.cpp
     src/runtime/save.cpp
+    src/runtime/savestate.cpp
     src/audio/ym2612.cpp
     src/audio/sn76489.cpp
     src/renderer/image_io.cpp
