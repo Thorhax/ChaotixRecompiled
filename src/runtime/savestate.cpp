@@ -142,6 +142,11 @@ bool load(Machine& m, const std::vector<uint8_t>& data, std::string* error) {
     auto next = std::make_unique<Machine>(m);
     fields(r, *next);
     if (!r.ok || r.pos != data.size()) return fail("damaged or incomplete");
+    // The raw VDP copy carries function pointers from the process that saved
+    // it; after a restart the code sits elsewhere, so keep this process's.
+    next->vdp.host = m.vdp.host;
+    next->vdp.on_vram_write = m.vdp.on_vram_write;
+    next->vdp.on_vram_write_user = m.vdp.on_vram_write_user;
 
     m = *next;
     m.stage_pending = false;

@@ -38,7 +38,6 @@ This folder contains platform assets and documentation for the Nintendo Switch h
 | **R** | Button Z | 6-Button Pad |
 | **Plus (+)** | Start | Pause / Start Game |
 | **Minus (-)** | Mode / Menu | Opens in-game settings, save states & achievements |
-| **Touchscreen** | Virtual On-Screen Controls | Enabled in handheld mode |
 
 ---
 

@@ -70,3 +70,20 @@ TEST(savestate, refuses_another_rom_and_damaged_data) {
     // Nothing was applied by the failed loads.
     CHECK_EQ(int(b->wram[0x1234]), 0x99);
 }
+
+TEST(savestate, a_state_from_another_run_keeps_this_runs_code_pointers) {
+    // A state written by an earlier run holds that run's code addresses,
+    // which mean nothing once the program is loaded somewhere else.
+    auto a = counting_machine();
+    a->vdp.host.dma_read16 = reinterpret_cast<uint16_t (*)(void*, uint32_t)>(uintptr_t(0xDEAD0000));
+    a->vdp.on_vram_write = reinterpret_cast<void (*)(void*, uint32_t, uint16_t)>(uintptr_t(0xDEAD0010));
+    const auto state = savestate::save(*a);
+
+    auto b = counting_machine();
+    const auto dma = b->vdp.host.dma_read16;
+    const auto vram_hook = b->vdp.on_vram_write;
+    std::string why;
+    CHECK(savestate::load(*b, state, &why));
+    CHECK(b->vdp.host.dma_read16 == dma);
+    CHECK(b->vdp.on_vram_write == vram_hook);
+}

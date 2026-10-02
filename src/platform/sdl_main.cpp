@@ -1034,6 +1034,10 @@ int main(int argc, char** argv) {
     // On: always drawn. Auto: only once the screen has actually been touched,
     // so a phone plugged into a controller is not covered in buttons nobody
     // is using. Off: never.
+    // Switch: no on-screen buttons at all; the Joy-Con are always there.
+#if defined(__SWITCH__)
+    app.cfg.touch = TouchMode::Off;
+#endif
     app.touch_enabled = app.cfg.touch == TouchMode::On;
 
     const uint64_t freq = SDL_GetPerformanceFrequency();
@@ -1089,7 +1093,8 @@ int main(int argc, char** argv) {
                         break;
                     }
                 }
-                app.fingers[e.tfinger.fingerID] = app.touch.hit(tx, ty);
+                // Buttons that are not drawn must not press anything either.
+                if (app.touch_enabled) app.fingers[e.tfinger.fingerID] = app.touch.hit(tx, ty);
                 break;
             }
             case SDL_EVENT_FINGER_UP: case SDL_EVENT_FINGER_CANCELED:

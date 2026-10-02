@@ -20,7 +20,9 @@ namespace {
 const char* kAspectNames[] = {"AUTO", "4:3", "16:9", "16:10", "21:9", "CUSTOM"};
 const char* kScaleNames[] = {"FIT", "INTEGER", "STRETCH"};
 const char* kWindowNames[] = {"WINDOW", "BORDERLESS", "FULLSCREEN"};
+#if !defined(__SWITCH__)
 const char* kTouchNames[] = {"AUTO", "ON", "OFF"};
+#endif
 
 std::string on_off(bool v) { return v ? "ON" : "OFF"; }
 
@@ -404,9 +406,11 @@ void Menu::build_options() {
     items_.push_back({"VOLUME",
                       [c] { return std::to_string(c->volume); },
                       [c](int s) { c->volume = std::clamp(c->volume + s * 5, 0, 100); }});
+#if !defined(__SWITCH__)
     items_.push_back({"TOUCH PAD",
                       [c] { return std::string(kTouchNames[int(c->touch)]); },
                       [c](int s) { if (s) cycle(c->touch, 3, s); }});
+#endif
     items_.push_back({"6-BUTTON PAD",
                       [c] { return on_off(c->six_button); },
                       [c](int s) { if (s) c->six_button = !c->six_button; }});
