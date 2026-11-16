@@ -259,7 +259,19 @@ if(CHAOTIX_BUILD_FRONTEND)
     elseif(CHAOTIX_SWITCH)
         add_executable(chaotix ${_frontend_sources}
             platforms/switch/sdl3/sdl3_shim.cpp
-            platforms/switch/switch_threads.cpp)
+            platforms/switch/switch_threads.cpp
+            platforms/switch/intro_host/switch_intro.cpp)
+        # The Thorhax intro, the startup video (platforms/switch/thorhax_intro,
+        # the same files in every Thorhax port). intro_host gives it the log
+        # macros it is written with, which need C++20's std::format.
+        include(${CMAKE_SOURCE_DIR}/platforms/switch/thorhax_intro/thorhax_intro.cmake)
+        thorhax_intro_add(chaotix)
+        target_include_directories(chaotix PRIVATE ${CMAKE_SOURCE_DIR}/platforms/switch/intro_host)
+        set_property(SOURCE ${CMAKE_SOURCE_DIR}/platforms/switch/thorhax_intro/thorhax_intro.cpp
+                     APPEND PROPERTY COMPILE_OPTIONS -std=gnu++20)
+        # pl_mpeg is someone else's code, built as it comes.
+        set_property(SOURCE ${CMAKE_SOURCE_DIR}/platforms/switch/thorhax_intro/pl_mpeg_impl.cpp
+                     APPEND PROPERTY COMPILE_OPTIONS -w)
         set_target_properties(chaotix PROPERTIES OUTPUT_NAME "ChaotixRecompiled")
     else()
         add_executable(chaotix WIN32 MACOSX_BUNDLE ${_frontend_sources})
@@ -299,7 +311,7 @@ if(CHAOTIX_BUILD_FRONTEND)
         # after it (platforms/switch/README.md). Releases are named
         # <upstream>-switch.<n>; the homebrew menu has room for 15 letters,
         # so it shows <upstream>-sw.<n>.
-        set(CHAOTIX_SWITCH_REVISION 1)
+        set(CHAOTIX_SWITCH_REVISION 2)
         set(CHAOTIX_SWITCH_VERSION "${PROJECT_VERSION}-sw.${CHAOTIX_SWITCH_REVISION}")
         # No RomFS: the .nro must never carry the game. Players put their own
         # ROM on the SD card.

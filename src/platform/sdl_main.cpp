@@ -18,6 +18,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "switch_intro.h"
+
 #define CHAOTIX_SWITCH_DIR "sdmc:/switch/chaotix/"
 
 extern "C" void userAppInit(void) {
@@ -2376,6 +2378,10 @@ int main(int argc, char** argv) {
     // Android's back button or gesture comes to us as a key (issue #72) rather
     // than closing the app: it opens and closes the menu, which has QUIT.
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+#ifdef __SWITCH__
+    // The Thorhax intro, before SDL opens the window and the audio device.
+    play_switch_intro();
+#endif
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
