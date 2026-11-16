@@ -1271,6 +1271,11 @@ void Menu::build_tether() {
                       [c, name] { return name(tether::kPartnerNames, tether::kPartnerCount, c->tether_partner); },
                       [c](int s) { if (s) c->tether_partner = (c->tether_partner + s + tether::kPartnerCount) % tether::kPartnerCount; },
                       "1 player. SOLO: hold CALL to bring back"});
+    // This fork's extra moves (runtime/moves.h).
+    items_.push_back({"MIGHTY STOMP",
+                      [c] { return on_off(c->move_stomp); },
+                      [c](int s) { if (s) c->move_stomp = !c->move_stomp; },
+                      "jump again in the air to drop"});
     items_.push_back({"BACK", {}, [this](int) { set_page(Page::Options); }});
 }
 

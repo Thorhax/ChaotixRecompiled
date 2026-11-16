@@ -565,6 +565,7 @@ int main(int argc, char** argv) {
     // enums' numbers or names), as a recorded session's "tether FRAME S P"
     // lines do.
     int tether_strength = 0, tether_partner = 0;
+    uint8_t move_sets[8] = {};  // --moves (runtime/moves.h)
     std::map<uint64_t, std::pair<int, int>> tether_events;
     // The title held while the front end is on it (issue #3,
     // runtime/title_hold.h): --hold-title FROM:TO holds it for those frames,
@@ -805,6 +806,16 @@ int main(int argc, char** argv) {
         else if (a == "--ghost-record") ghost_record_path = next();
         else if (a == "--ghost-log") ghost_log = std::strtoull(next().c_str(), nullptr, 10);
         else if (a == "--ghost-threaded") ghost_threaded = true;
+        else if (a == "--moves") {
+            // CHARACTER:MASK (hex): the extra moves a character slot has
+            // (runtime/moves.h), on every machine run beside the first.
+            auto parts = split(next(), ':');
+            if (parts.size() < 2 || std::atoi(parts[0].c_str()) < 0 || std::atoi(parts[0].c_str()) > 7) {
+                std::fprintf(stderr, "bad --moves\n");
+                return 2;
+            }
+            move_sets[std::atoi(parts[0].c_str())] = uint8_t(std::strtoul(parts[1].c_str(), nullptr, 16));
+        }
         else if (a == "--peek-every") {
             // N:ADDR:BYTES, ADDR in hex: prints those 68K work RAM bytes every
             // N frames (tests measure what the game did, a player's speed say).
@@ -1245,6 +1256,8 @@ int main(int argc, char** argv) {
             if (x) { x->tether_strength = uint8_t(strength); x->tether_partner = uint8_t(partner); }
     };
     set_tether(tether_strength, tether_partner);
+    for (Machine* x : {m.get(), ref.get(), nat.get()})
+        if (x) std::copy(std::begin(move_sets), std::end(move_sets), std::begin(x->move_sets));
     auto partner_in_force = [&](uint64_t frame) {
         const bool picked_none = ls.solo_now() || (!ls.running && m->lobby_partner == lobby::kPartnerNone);
         const int want = int(tether::partner_in_force(gameplay_partner, false, picked_none));

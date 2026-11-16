@@ -987,6 +987,21 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
         PASS_REGULAR_EXPRESSION
         "peek 4700 E038 00140010.*peek 4700 DFF2 000700000003.*peek 4800 FA00 0000C69E4000BC00000037DC000008A80000.*save RAM changed on 1 frames, the last at frame 4639.*lockstep: 4800 frames bit-identical")
 
+    # This fork's extra moves (runtime/moves.h). Mighty with the stomp, fuzzed
+    # play in Botanic Base 1: the interpreter and the recompiled code stay
+    # bit-identical with the move's hook at work; and a scripted jump, stomp
+    # and landing does what the move says (tests/test_moves.py).
+    add_test(NAME moves_stomp_lockstep
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 5000 --stage 300:0:1:0:0:7:0
+                --moves 0:1 --fuzz 7:700:5000 --lockstep)
+    set_tests_properties(moves_stomp_lockstep PROPERTIES
+        PASS_REGULAR_EXPRESSION "lockstep: 5000 frames bit-identical")
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        add_test(NAME moves_stomp
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_moves.py
+                    $<TARGET_FILE:chaotix_headless> "${CHAOTIX_ROM}")
+    endif()
     # Ring tether options (issue #43, runtime/tether.h, docs/RING_TETHER.md).
     # Off, BOTANIC BASE 1 and TECHNO TOWER 2 played with random input give
     # exactly the frames they gave before the options existed (golden hashes

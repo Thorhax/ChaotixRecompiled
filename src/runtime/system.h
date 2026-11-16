@@ -241,6 +241,12 @@ public:
     // Latched by the SOLO partner's hook: CALL brought the partner back, so
     // it stays until the next scene. In save states.
     bool tether_called = false;
+    // Extra moves (this fork, runtime/moves.h): the moves each character slot
+    // has (moves::kStomp...), a setting the app gives like the tether's, and
+    // what the player's and the partner's objects are in the middle of
+    // (moves::kStomping), which is in save states.
+    uint8_t move_sets[8] = {};
+    uint8_t move_state[2] = {};
     // FOLLOW's note of where the player stood before the game put one of the
     // two back on the tether's circle; used and dropped by the next
     // instruction's hook, within the same routine, so never in a save state.

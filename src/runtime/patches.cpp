@@ -2,6 +2,7 @@
 #include "runtime/patches.h"
 #include "runtime/lobby.h"
 #include "runtime/system.h"
+#include "runtime/moves.h"
 #include "runtime/tether.h"
 #include "runtime/title_hold.h"
 #include <algorithm>
@@ -121,7 +122,10 @@ void m68k_hook(m68k::State* c, uint32_t pc) {
         lobby::apply(*m);
         return;
     // Issue #43: the ring tether options (runtime/tether.h).
-    case tether::kCharsUpdate: tether::on_chars_update(*m); return;
+    case tether::kCharsUpdate:
+        tether::on_chars_update(*m);
+        moves::on_chars_update(*m);  // this fork's extra moves (runtime/moves.h)
+        return;
     case tether::kForce: tether::on_force(*m, c); return;
     case tether::kPartnerSide: tether::on_partner_side(*m, c); return;
     case tether::kClampBefore: tether::on_clamp_before(*m, c); return;

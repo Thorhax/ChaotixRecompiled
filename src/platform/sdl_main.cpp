@@ -63,6 +63,7 @@ extern "C" void userAppExit(void) {
 #include "game/cheats.h"
 #include "runtime/lobby.h"
 #include "runtime/tether.h"
+#include "runtime/moves.h"
 #include "runtime/title_hold.h"
 #include "game/recomp_dispatch.h"
 #include "input/input.h"
@@ -1121,6 +1122,15 @@ void apply_tether(App& app) {
     app.recorded_tether.push_back({app.m->frame_count, strength, partner});
 }
 
+// This fork's extra moves (runtime/moves.h), set before each frame like the
+// tether options, and like them off for TIME ATTACK runs. (Netplay runs its
+// own frames and never comes this way, so a session plays without them.)
+void apply_moves(App& app) {
+    uint8_t sets[8] = {};
+    if (!app.ta.running && app.cfg.move_stomp) sets[0] |= moves::kStomp;  // Mighty is character 0
+    std::copy(std::begin(sets), std::end(sets), std::begin(app.m->move_sets));
+}
+
 // Settings and the cartridge save, written now. Android ends an app without
 // a quit event when it is swiped away, so waiting for the exit lost every
 // setting there (issue #26): this runs whenever the menu closes and whenever
@@ -1491,7 +1501,7 @@ void speedrun_reset(App& app) {
 
 void follow_speedrun(App& app) {
     // A run with a cheat or a changed ring tether (issue #43) is not kept as a best.
-    const bool assisted = app.cheating || tether::any(*app.m);
+    const bool assisted = app.cheating || tether::any(*app.m) || moves::any(*app.m);
     if (assisted) app.run.mark_cheated();
     const unsigned ev = app.run.update(*app.m, host_seconds());
     if (assisted) app.run.mark_cheated();
@@ -3237,6 +3247,7 @@ int main(int argc, char** argv) {
             apply_cheats(app);
             apply_lobby_shortcuts(app);
             apply_tether(app);
+            apply_moves(app);
             apply_title_hold(app);
             audio::set_music_and_effect_levels(*app.m, float(app.cfg.music_volume) / 100.0f,
                                                float(app.cfg.effects_volume) / 100.0f);
@@ -3273,7 +3284,7 @@ int main(int argc, char** argv) {
                 rewind_push(app);
             // Not with the ring tether changed either (issue #43): the game
             // plays differently.
-            if (app.achievements_on && !app.cheating && !tether::any(*app.m) && !app.ls.running) {
+            if (app.achievements_on && !app.cheating && !tether::any(*app.m) && !moves::any(*app.m) && !app.ls.running) {
                 app.achievements_paused = false;
                 app.achievements.update(*app.m, [&](const achievements::Achievement& a) {
                     App::Toast t{a.title, a.description, SDL_GetTicks() + 5000, "AWARD GET!"};

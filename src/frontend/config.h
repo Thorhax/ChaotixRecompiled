@@ -191,6 +191,10 @@ struct Config {
     // tether's strength (tether::Strength) and what the partner does
     // (tether::Partner), 0 the original game. Not in TIME ATTACK runs.
     int tether_strength = 0;
+    // [Moves] Extra moves (this fork, runtime/moves.h): moves the game never
+    // had. Stomp: Mighty's drop from Sonic Mania (jump again in the air).
+    // Off: the game as it was. Not in TIME ATTACK runs or netplay.
+    bool move_stomp = false;
     int tether_partner = 0;
     // [MusicPlayer] (issue #48, frontend/jukebox.h): what happens when a
     // track ends or has played FadeAfter seconds (0: never fades): 0 LOOP

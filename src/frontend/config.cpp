@@ -235,6 +235,8 @@ bool Config::load(const std::string& path) {
             };
             if (k == "Strength") tether_strength = pick(tether::kStrengthNames, tether::kStrengthCount, tether_strength);
             else if (k == "Partner") tether_partner = pick(tether::kPartnerNames, tether::kPartnerCount, tether_partner);
+        } else if (section == "Moves") {
+            if (k == "Stomp") move_stomp = parse_bool(v, move_stomp);
         } else if (section == "MusicPlayer") {
             if (k == "Repeat") music_repeat = std::clamp(std::atoi(v.c_str()), 0, 2);
             else if (k == "FadeAfter") music_fade_after = std::clamp(std::atoi(v.c_str()), 0, 3600);
@@ -383,6 +385,9 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "Strength = %s\nPartner = %s\n",
                  tether::kStrengthNames[std::clamp(tether_strength, 0, tether::kStrengthCount - 1)],
                  tether::kPartnerNames[std::clamp(tether_partner, 0, tether::kPartnerCount - 1)]);
+    std::fprintf(f, "\n[Moves]\n# Extra moves the game never had (not in TIME ATTACK or netplay; no awards while on).\n");
+    std::fprintf(f, "# Stomp: Mighty drops straight down when jump is pressed again in the air.\n");
+    std::fprintf(f, "Stomp = %s\n", move_stomp ? "true" : "false");
     std::fprintf(f, "\n[MusicPlayer]\n# When a track ends: 0 play it again, 1 stop, 2 the next track.\n");
     std::fprintf(f, "# FadeAfter: seconds a track plays before it fades out when Repeat is 1 or 2 (0: never).\n");
     std::fprintf(f, "Repeat = %d\nFadeAfter = %d\n", music_repeat, music_fade_after);
