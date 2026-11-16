@@ -108,6 +108,17 @@ void Config::set_defaults() {
         {"a", "Keypad 1"}, {"b", "Keypad 3"}, {"c", "Keypad 0"}, {"start", "Keypad Enter"},
         {"x", "Keypad 7"}, {"y", "Keypad 9"}, {"z", "Keypad 5"}, {"mode", "Keypad +"},
     };
+#ifdef __SWITCH__
+    // Nintendo Switch: Minus opens the menu, the screen is the window, there
+    // are no touch controls, and the releases upstream announces have no
+    // Switch build to offer.
+    menu_button = "back";
+    pads.erase("mode");  // the game does not use MODE, and Minus is the menu's
+    pads2.erase("mode");
+    window_mode = WindowMode::Fullscreen;
+    touch = TouchMode::Off;
+    check_updates = false;
+#endif
 }
 
 bool Config::load(const std::string& path) {

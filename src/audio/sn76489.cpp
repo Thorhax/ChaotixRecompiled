@@ -36,15 +36,18 @@ int16_t Sn76489::run(int clocks) {
     div_ += clocks;
     while (div_ >= 16) {
         div_ -= 16;
+        // The Sega PSG treats a period of 0 as 1 (the TI part counts it as
+        // 0x400). Chaotix drives its noise from tone 2 set to 0, so this
+        // decides between a hiss and a rumble.
         for (int c = 0; c < 3; ++c) {
             if (--counter_[c] <= 0) {
-                counter_[c] = tone_[c] ? tone_[c] : 0x400;
+                counter_[c] = tone_[c] ? tone_[c] : 1;
                 out_[c] ^= 1;
             }
         }
         if (--counter_[3] <= 0) {
             int rate = noise_ & 3;
-            counter_[3] = rate == 3 ? (tone_[2] ? tone_[2] : 0x400) * 2 : (0x10 << rate) * 2;
+            counter_[3] = rate == 3 ? (tone_[2] ? tone_[2] : 1) * 2 : (0x10 << rate) * 2;
             uint16_t fb = (noise_ & 4) ? uint16_t(((lfsr_ & 1) ^ ((lfsr_ >> 3) & 1))) : uint16_t(lfsr_ & 1);
             lfsr_ = uint16_t((lfsr_ >> 1) | (fb << 15));
             out_[3] = lfsr_ & 1;

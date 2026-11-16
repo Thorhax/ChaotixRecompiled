@@ -9,6 +9,13 @@ hardware compatibility layer (32X and Mega Drive registers, both VDPs,
 interrupts, timers, sound chips) plus an SDL3 frontend make it an ordinary
 native program on each platform.
 
+> **This repository is the Nintendo Switch port.** It follows
+> [YuutaTsubasa/ChaotixRecompiled](https://github.com/YuutaTsubasa/ChaotixRecompiled),
+> where the recompiler, the runtime and the frontend are written, and adds what
+> the Switch needs on top (currently upstream 0.15.22). Installing, the
+> controls and building it: [platforms/switch/README.md](platforms/switch/README.md).
+> Everything below is upstream's own description of the program.
+
 How it was made, step by step, with the numbers behind each step: the
 [Recompiled Handbook](https://yuuta-tsubasa.studio/ChaotixRecompiled/)
 (English and Traditional Chinese; its source is [site/index.html](site/index.html)).
@@ -42,6 +49,7 @@ behind DATA LOAD, TRAINING, PLAY STYLE and PLAYER SELECT
 | Linux | build configuration present, not yet run by the author |
 | macOS | [builds and runs](docs/BUILDING_APPLE.md) on Apple Silicon (an M1; every test passes, lockstep bit-identical) |
 | Android | [builds and runs](platforms/android/README.md) (verified on an API 36 emulator); OPTIONS > VIDEO > SHOW FPS shows how fast it runs ([performance notes](docs/PERFORMANCE_ANDROID.md)) |
+| Nintendo Switch | [builds and runs](platforms/switch/README.md) as a homebrew `.nro` (this fork; played on a console at full speed) |
 | iOS / iPadOS | [builds and runs in the iOS Simulator](docs/BUILDING_APPLE.md); an `.ipa` for sideloading, not yet tried on a device |
 
 [docs/MILESTONES.md](docs/MILESTONES.md) tracks the detail;

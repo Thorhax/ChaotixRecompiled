@@ -9,6 +9,30 @@
 #ifdef SDL_PLATFORM_ANDROID
 #include <jni.h>
 #endif
+#ifdef __SWITCH__
+// Nintendo Switch (platforms/switch/README.md): SDL 2 behind the SDL 3 names
+// (platforms/switch/sdl3), and everything the game keeps in one folder of the
+// SD card.
+#include <netinet/in.h>
+#include <switch.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#define CHAOTIX_SWITCH_DIR "sdmc:/switch/chaotix/"
+
+extern "C" void userAppInit(void) {
+    socketInitializeDefault();  // NETPLAY
+    // Started from a PC with nxlink -s: the log goes back to it.
+    if (__nxlink_host.s_addr != 0) nxlinkStdio();
+    mkdir("sdmc:/switch", 0777);
+    mkdir("sdmc:/switch/chaotix", 0777);
+    chdir(CHAOTIX_SWITCH_DIR);
+}
+
+extern "C" void userAppExit(void) {
+    socketExit();
+}
+#endif
 
 #include "audio/music_mods.h"
 #include "audio/sample_mods.h"
@@ -359,7 +383,7 @@ struct App {
 // chaotix_headless --rewind).
 constexpr int kRewindInterval = 2;
 constexpr size_t kRewindMaxSnapshots = 60 * 60 / kRewindInterval;
-#if defined(SDL_PLATFORM_ANDROID) || defined(SDL_PLATFORM_IOS)
+#if defined(SDL_PLATFORM_ANDROID) || defined(SDL_PLATFORM_IOS) || defined(__SWITCH__)
 constexpr size_t kRewindBudget = size_t(32) << 20;
 #else
 constexpr size_t kRewindBudget = size_t(64) << 20;
@@ -433,6 +457,13 @@ std::vector<std::string> rom_search_dirs(const App& app) {
         dirs.push_back(std::filesystem::path(base));
     }
     dirs.push_back(std::filesystem::path(app.store.root()) / "rom");
+#ifdef __SWITCH__
+    // The SD card: the game's folder, where the README says to put the ROM,
+    // and the folders people keep their ROMs in.
+    for (const char* d : {CHAOTIX_SWITCH_DIR, CHAOTIX_SWITCH_DIR "Game", CHAOTIX_SWITCH_DIR "rom", "sdmc:/switch",
+                          "sdmc:/roms", "sdmc:/roms/32x", "sdmc:/roms/sega32x", "sdmc:/roms/megadrive", "sdmc:/"})
+        dirs.push_back(d);
+#endif
     // Desktop: the usual download/document folders. Mobile: the app's own
     // documents folder, which is what file managers expose.
 #ifdef SDL_PLATFORM_IOS
@@ -796,6 +827,10 @@ void start_update_check(App& app) {
         return;
     }
     if (!app.cfg.check_updates || app.autotest_frames) return;
+#ifdef __SWITCH__
+    // The releases asked about are upstream's, which have no Switch build.
+    return;
+#endif
     app.update_answer = std::make_shared<App::UpdateAnswer>();
     std::thread([answer = app.update_answer] {
         std::string body, tag;
@@ -2361,6 +2396,9 @@ int main(int argc, char** argv) {
     if (user_dir.empty())
         if (const char* documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS)) user_dir = documents;
 #endif
+#ifdef __SWITCH__
+    if (user_dir.empty()) user_dir = CHAOTIX_SWITCH_DIR;
+#endif
     if (user_dir.empty()) {
         char* pref = SDL_GetPrefPath("ChaotixRecompiled", "ChaotixRecompiled");
         user_dir = pref ? pref : "./";
@@ -2760,6 +2798,11 @@ int main(int argc, char** argv) {
         ready = install_rom_file(rom_path, app.store.root(), &imported, &err);
         if (ready) rom_path = imported;
     }
+#ifdef __SWITCH__
+    // A ROM that is simply no longer on the SD card is not an import that
+    // went wrong: the setup page says where to put one.
+    if (!ready && !rom_path.empty() && !std::filesystem::exists(rom_path, rom_ec)) err.clear();
+#endif
     if (!ready) {
         if (app.autotest_frames) {  // tests never show the setup screen
             std::fprintf(stderr, "no usable ROM: %s\n", err.c_str());
@@ -2884,6 +2927,10 @@ int main(int argc, char** argv) {
     // On: always drawn. Auto: only once the screen has actually been touched,
     // so a phone plugged into a controller is not covered in buttons nobody
     // is using. Off: never.
+#ifdef __SWITCH__
+    // No on-screen buttons on the Switch: the Joy-Con are always there.
+    app.cfg.touch = TouchMode::Off;
+#endif
     app.touch_enabled = app.cfg.touch == TouchMode::On;
 
     const uint64_t freq = SDL_GetPerformanceFrequency();
@@ -2904,6 +2951,11 @@ int main(int argc, char** argv) {
     }
     bool menu_was_open = app.menu.open();
     while (app.running) {
+#ifdef __SWITCH__
+        // HOME then Close, or leaving the homebrew menu's title: stop here,
+        // so the save and the settings are written on the way out.
+        if (!appletMainLoop()) break;
+#endif
         take_update_answer(app);
         // The menu is where settings change: keep them the moment it closes.
         if (menu_was_open && !app.menu.open()) save_now(app);

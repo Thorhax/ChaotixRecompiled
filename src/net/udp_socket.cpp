@@ -23,6 +23,12 @@ using socklen_t = int;
 #include <unistd.h>
 #endif
 
+// The Nintendo Switch's sockets are IPv4 only: its headers have no IPv6
+// address type at all.
+#if defined(__SWITCH__)
+#define CHAOTIX_NET_IPV4_ONLY 1
+#endif
+
 namespace chaotix::net {
 
 namespace {
@@ -52,11 +58,13 @@ void to_endpoint(const sockaddr* sa, size_t len, Endpoint& out) {
     out.size = uint8_t(len);
 }
 
+#ifndef CHAOTIX_NET_IPV4_ONLY
 int family_of(const Endpoint& e) {
     sockaddr_storage ss{};
     std::memcpy(&ss, e.bytes.data(), e.size);
     return ss.ss_family;
 }
+#endif
 
 } // namespace
 
@@ -75,7 +83,12 @@ bool UdpSocket::open(uint16_t port, std::string* error, const Endpoint* like) {
         if (error) *error = "the network is not available";
         return false;
     }
+#ifdef CHAOTIX_NET_IPV4_ONLY
+    (void)like;
+    const int want = AF_INET;
+#else
     const int want = like ? family_of(*like) : AF_INET6;
+#endif
     for (int family : {want, AF_INET}) {
         if (family != AF_INET && family != AF_INET6) continue;
 #ifdef _WIN32
@@ -87,19 +100,24 @@ bool UdpSocket::open(uint16_t port, std::string* error, const Endpoint* like) {
         if (s < 0) continue;
         const intptr_t fd = s;
 #endif
+#ifndef CHAOTIX_NET_IPV4_ONLY
         if (family == AF_INET6) {
             int off = 0;  // IPv4 too, as mapped addresses
             setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&off), sizeof off);
         }
+#endif
         sockaddr_storage ss{};
         socklen_t len = 0;
+#ifndef CHAOTIX_NET_IPV4_ONLY
         if (family == AF_INET6) {
             auto* a = reinterpret_cast<sockaddr_in6*>(&ss);
             a->sin6_family = AF_INET6;
             a->sin6_port = htons(port);
             a->sin6_addr = in6addr_any;
             len = sizeof(sockaddr_in6);
-        } else {
+        } else
+#endif
+        {
             auto* a = reinterpret_cast<sockaddr_in*>(&ss);
             a->sin_family = AF_INET;
             a->sin_port = htons(port);
@@ -139,7 +157,9 @@ uint16_t UdpSocket::local_port() const {
     sockaddr_storage ss{};
     socklen_t len = sizeof ss;
     if (getsockname(decltype(socket(0, 0, 0))(fd_), reinterpret_cast<sockaddr*>(&ss), &len) != 0) return 0;
+#ifndef CHAOTIX_NET_IPV4_ONLY
     if (ss.ss_family == AF_INET6) return ntohs(reinterpret_cast<sockaddr_in6*>(&ss)->sin6_port);
+#endif
     return ntohs(reinterpret_cast<sockaddr_in*>(&ss)->sin_port);
 }
 
@@ -148,6 +168,7 @@ void UdpSocket::send(const Endpoint& to, const uint8_t* data, size_t n) {
     sockaddr_storage ss{};
     std::memcpy(&ss, to.bytes.data(), to.size);
     socklen_t len = to.size;
+#ifndef CHAOTIX_NET_IPV4_ONLY
     if (family_ == AF_INET6 && ss.ss_family == AF_INET) {
         // An IPv4 address through the dual-stack socket: as a mapped one.
         const sockaddr_in v4 = *reinterpret_cast<sockaddr_in*>(&ss);
@@ -161,6 +182,7 @@ void UdpSocket::send(const Endpoint& to, const uint8_t* data, size_t n) {
         std::memcpy(&ss, &v6, sizeof v6);
         len = sizeof v6;
     }
+#endif
     sendto(decltype(socket(0, 0, 0))(fd_), reinterpret_cast<const char*>(data), int(n), 0,
            reinterpret_cast<sockaddr*>(&ss), len);
 }
@@ -190,8 +212,9 @@ std::string UdpSocket::describe(const Endpoint& e) const {
     if (!e.valid()) return "?";
     sockaddr_storage ss{};
     std::memcpy(&ss, e.bytes.data(), e.size);
-    char host[INET6_ADDRSTRLEN + 1] = {};
+    char host[64] = {};  // room for an IPv6 address
     uint16_t port = 0;
+#ifndef CHAOTIX_NET_IPV4_ONLY
     if (ss.ss_family == AF_INET6) {
         auto* a = reinterpret_cast<sockaddr_in6*>(&ss);
         const uint8_t* b = reinterpret_cast<const uint8_t*>(&a->sin6_addr);
@@ -204,6 +227,7 @@ std::string UdpSocket::describe(const Endpoint& e) const {
         inet_ntop(AF_INET6, &a->sin6_addr, host, sizeof host);
         return "[" + std::string(host) + "]:" + std::to_string(port);
     }
+#endif
     auto* a = reinterpret_cast<sockaddr_in*>(&ss);
     inet_ntop(AF_INET, &a->sin_addr, host, sizeof host);
     port = ntohs(a->sin_port);
@@ -242,7 +266,11 @@ bool UdpSocket::resolve(const std::string& text_in, uint16_t default_port, Endpo
         return false;
     }
     addrinfo hints{};
+#ifdef CHAOTIX_NET_IPV4_ONLY
+    hints.ai_family = AF_INET;
+#else
     hints.ai_family = AF_UNSPEC;
+#endif
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_protocol = IPPROTO_UDP;
     addrinfo* res = nullptr;

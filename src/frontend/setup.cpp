@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <system_error>
+#include <vector>
 
 namespace chaotix::setup {
 
@@ -19,6 +21,34 @@ bool has_rom_extension(const fs::path& p) {
 }
 
 std::string file_name(const std::string& path) { return fs::path(path).filename().string(); }
+
+// fs::copy_file, and where the C++ library's does not work -- devkitPro's for
+// the Nintendo Switch creates the copy and then fails, leaving it empty --
+// the same with plain streams. `ec` says why when it returns false.
+bool copy_rom(const fs::path& from, const fs::path& to, std::error_code& ec) {
+    ec.clear();
+    if (fs::copy_file(from, to, fs::copy_options::overwrite_existing, ec) && !ec) return true;
+    const std::error_code first = ec ? ec : std::make_error_code(std::errc::io_error);
+    ec = first;
+    std::ifstream in(from, std::ios::binary);
+    std::ofstream out(to, std::ios::binary | std::ios::trunc);
+    if (!in || !out) return false;
+    // In large blocks: an SD card is slow a few bytes at a time.
+    std::vector<char> block(size_t(256) * 1024);
+    while (in && out) {
+        in.read(block.data(), std::streamsize(block.size()));
+        out.write(block.data(), in.gcount());
+    }
+    out.close();
+    if (!out || in.bad()) return false;
+    std::error_code size_ec;
+    const auto want = fs::file_size(from, size_ec);
+    if (size_ec) return false;
+    const auto got = fs::file_size(to, size_ec);
+    if (size_ec || want != got) return false;
+    ec.clear();
+    return true;
+}
 
 } // namespace
 
@@ -139,8 +169,7 @@ bool install(const std::string& source, const std::string& store_root, std::stri
         fs::remove(fs::path(tmp), ignored);
         return fail(message);
     };
-    fs::copy_file(fs::path(source), fs::path(tmp), fs::copy_options::overwrite_existing, ec);
-    if (ec) {
+    if (!copy_rom(fs::path(source), fs::path(tmp), ec)) {
         return fail_and_clean_up("cannot copy the ROM to", tmp, ec);
     }
     fs::rename(fs::path(tmp), fs::path(dest), ec);

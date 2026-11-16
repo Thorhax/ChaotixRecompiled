@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <map>
 #include <string>
 
 #include "frontend/backdrop.h"
@@ -32,6 +33,44 @@ constexpr ui::Font kHintFont = ui::Font::PixelSmall;
 // The notes beside a page's entries ("JUMP", "NOT USED BY THIS GAME"): the
 // same small letters, so with the game's font on they are its letters too.
 constexpr ui::Font kNoteFont = ui::Font::PixelSmall;
+
+// The hints name the keyboard's keys. On the Nintendo Switch there is no
+// keyboard: they name the buttons that do the same on a Joy-Con (A confirms
+// and B goes back there, see Menu::on_pad).
+const char* hint_text(const char* keys) {
+#ifdef __SWITCH__
+    static std::map<std::string, std::string> made;
+    auto it = made.find(keys);
+    if (it == made.end()) {
+        std::string t = keys;
+        for (const auto& [key, button] : {std::pair<const char*, const char*>{"Enter", "A"}, {"Esc", "B"}})
+            for (size_t at = t.find(key); at != std::string::npos; at = t.find(key, at))
+                t.replace(at, std::strlen(key), button);
+        it = made.emplace(keys, std::move(t)).first;
+    }
+    return it->second.c_str();
+#else
+    return keys;
+#endif
+}
+
+#ifdef __SWITCH__
+// Rows for things the console does not have: a keyboard, a window, touch
+// controls, and upstream's releases to be told about.
+template <class Items>
+void drop_rows_without_a_use(Items& items) {
+    auto ends_with = [](const std::string& s, const char* tail) {
+        const size_t n = std::strlen(tail);
+        return s.size() >= n && s.compare(s.size() - n, n, tail) == 0;
+    };
+    for (size_t i = items.size(); i-- > 0;) {
+        const std::string& l = items[i].label;
+        if (ends_with(l, " KEY") || ends_with(l, " KEYBOARD") || l.rfind("TOUCH ", 0) == 0 ||
+            l == "PRESSED OPACITY" || l == "SCREEN" || l == "CHECK FOR UPDATES")
+            items.erase(items.begin() + long(i));
+    }
+}
+#endif
 
 // Menus of this era shout, so the labels are upper case and the selected one
 // carries a marker rather than a highlight bar.
@@ -298,6 +337,14 @@ const PadButton kPadButtons[] = {
 // never costs the game one. SDL's own names, with what they are called on the
 // controllers people actually have.
 struct MenuButtonChoice { const char* name; const char* label; };
+#ifdef __SWITCH__
+// A Joy-Con pair or a Pro Controller: Minus and the stick clicks are spare.
+const MenuButtonChoice kMenuButtons[] = {
+    {"back", "MINUS"},
+    {"leftstick", "L STICK CLICK"},
+    {"rightstick", "R STICK CLICK"},
+};
+#else
 const MenuButtonChoice kMenuButtons[] = {
     {"leftstick", "LEFT STICK CLICK"},
     {"rightstick", "RIGHT STICK CLICK"},
@@ -305,11 +352,22 @@ const MenuButtonChoice kMenuButtons[] = {
     {"touchpad", "TOUCHPAD CLICK"},
     {"misc1", "SHARE / CAPTURE"},
 };
+#endif
 constexpr int kMenuButtonCount = int(sizeof kMenuButtons / sizeof kMenuButtons[0]);
 
 // Fast-forward on a pad (issue #45): the same spare buttons, and the triggers,
 // which the emulated pad does not use either (SDL calls them axes; the
 // frontend reads them as pressed past half way).
+#ifdef __SWITCH__
+const MenuButtonChoice kFastForwardButtons[] = {
+    {"righttrigger", "ZR"},
+    {"lefttrigger", "ZL"},
+    {"rightstick", "R STICK CLICK"},
+    {"leftstick", "L STICK CLICK"},
+    {"back", "MINUS"},
+    {"none", "NONE"},
+};
+#else
 const MenuButtonChoice kFastForwardButtons[] = {
     {"righttrigger", "RIGHT TRIGGER"},
     {"lefttrigger", "LEFT TRIGGER"},
@@ -320,6 +378,7 @@ const MenuButtonChoice kFastForwardButtons[] = {
     {"misc1", "SHARE / CAPTURE"},
     {"none", "NONE"},
 };
+#endif
 constexpr int kFastForwardButtonCount = int(sizeof kFastForwardButtons / sizeof kFastForwardButtons[0]);
 // What awaiting_ holds while a host key (fast-forward, save states, rewind)
 // is being captured; the key page's captures are Mega Drive button names,
@@ -354,6 +413,24 @@ std::string upper(std::string v) {
     return v;
 }
 
+// What a gamepad input is called where the player reads it: the host
+// functions' own labels, else SDL's name for it.
+std::string pad_label(const std::string& name) {
+#ifdef __SWITCH__
+    // SDL names the face buttons by where they are on an Xbox pad; a Joy-Con
+    // has other letters in those places.
+    static const MenuButtonChoice kJoyCon[] = {
+        {"a", "B"}, {"b", "A"}, {"x", "Y"}, {"y", "X"},
+        {"leftshoulder", "L"}, {"rightshoulder", "R"}, {"start", "PLUS"},
+        {"dpup", "UP"}, {"dpdown", "DOWN"}, {"dpleft", "LEFT"}, {"dpright", "RIGHT"},
+    };
+    for (const MenuButtonChoice& b : kJoyCon)
+        if (name == b.name) return b.label;
+#endif
+    if (const MenuButtonChoice* b = pad_choice(name)) return b->label;
+    return upper(name);
+}
+
 std::string device_label(const Menu::Hooks& hooks, const std::string& dev) {
     if (dev == "auto") return "AUTO";
     if (dev == "keyboard") return "KEYBOARD";
@@ -362,6 +439,11 @@ std::string device_label(const Menu::Hooks& hooks, const std::string& dev) {
         // "PAD 2" says nothing about which controller that is, so show the
         // name the system reports and fall back to the number.
         const int i = std::atoi(dev.c_str() + 3);
+#ifdef __SWITCH__
+        // Every one of the console's eight is a "Switch Controller"; its
+        // number is the player light on it.
+        return "CONTROLLER " + std::to_string(i);
+#endif
         if (hooks.pad_name) {
             const std::string name = hooks.pad_name(i - 1);
             if (!name.empty()) return upper(name);
@@ -372,7 +454,11 @@ std::string device_label(const Menu::Hooks& hooks, const std::string& dev) {
 }
 
 std::vector<std::string> Menu::device_choices() const {
+#ifdef __SWITCH__
+    std::vector<std::string> out{"auto"};  // no keyboard to give a player
+#else
     std::vector<std::string> out{"auto", "keyboard"};
+#endif
     const int pads = hooks_.pad_count ? hooks_.pad_count() : 0;
     for (int i = 1; i <= pads; ++i) out.push_back("pad" + std::to_string(i));
     out.push_back("none");
@@ -453,6 +539,9 @@ void Menu::build_controls() {
                       }});
     // Issue #40: the keys and buttons for save states and rewind, on a page of
     // their own (this one is as long as a phone's screen allows).
+#ifdef __SWITCH__
+    drop_rows_without_a_use(items_);
+#endif
     items_.push_back({"STATES AND REWIND", {}, [this](int) { set_page(Page::StateKeys); }});
     items_.push_back({"BACK", {}, [this](int) { const Page back = return_to_; set_page(back); }});
 }
@@ -552,8 +641,7 @@ void Menu::build_state_keys() {
         Config* cc = cfg_;
         items_.push_back({label,
                           [cc, field] {
-                              const MenuButtonChoice* b = pad_choice(cc->*field);
-                              return b ? std::string(b->label) : upper(cc->*field);
+                              return pad_label(cc->*field);
                           },
                           [cc, field](int step) {
                               if (!step) return;
@@ -577,6 +665,9 @@ void Menu::build_state_keys() {
                               cc->*field = kFastForwardButtons[i].name;
                           }});
     };
+#ifdef __SWITCH__
+    drop_rows_without_a_use(items_);
+#endif
     pad_row("SAVE STATE PAD", &Config::state_save_button);
     pad_row("LOAD STATE PAD", &Config::state_load_button);
     pad_row("REWIND PAD", &Config::rewind_button);
@@ -828,8 +919,7 @@ void Menu::build_keys() {
                                                       : (p == 0 ? c->keys : c->keys2);
                               auto it = binds.find(button);
                               if (it == binds.end()) return std::string("-");
-                              const MenuButtonChoice* b = pad ? pad_choice(it->second) : nullptr;
-                              return b ? std::string(b->label) : upper(it->second);
+                              return pad ? pad_label(it->second) : upper(it->second);
                           },
                           [this, button](int step) {
                               // Enter starts the capture; left/right do nothing
@@ -910,6 +1000,9 @@ void Menu::build_video() {
                           cycle(at, ui::kMenuSizes + 1, s);
                           c->menu_size = at - 1;
                       }});
+#ifdef __SWITCH__
+    drop_rows_without_a_use(items_);
+#endif
     items_.push_back({"BACK", {}, [this](int) { set_page(Page::Options); }});
 }
 
@@ -977,6 +1070,9 @@ void Menu::build_input() {
     items_.push_back({"6-BUTTON PAD",
                       [c] { return on_off(c->six_button); },
                       [c](int s) { if (s) c->six_button = !c->six_button; }});
+#ifdef __SWITCH__
+    drop_rows_without_a_use(items_);
+#endif
     items_.push_back({"BACK", {}, [this](int) { set_page(Page::Options); }});
 }
 
@@ -1064,6 +1160,9 @@ void Menu::build_extras() {
                }};
     reset.pressed = true;
     items_.push_back(std::move(reset));
+#ifdef __SWITCH__
+    drop_rows_without_a_use(items_);
+#endif
     items_.push_back({"BACK", {}, [this](int) { set_page(Page::Options); }});
 }
 
@@ -1232,6 +1331,9 @@ void Menu::build_speedrun() {
     };
     key_row("START RUN KEY", kRunStartCapture, &Config::sr_start_key);
     key_row("RESET RUN KEY", kRunResetCapture, &Config::sr_reset_key);
+#ifdef __SWITCH__
+    drop_rows_without_a_use(items_);
+#endif
     items_.push_back({"BACK", {}, [this](int) { set_page(Page::Extras); }});
 }
 
@@ -1711,6 +1813,15 @@ bool Menu::on_pad_trigger(const char* name) {
 
 bool Menu::on_pad(Uint8 button) {
     if (!open()) return false;
+#ifdef __SWITCH__
+    // Nintendo's layout: A, on the right, confirms and B, below it, goes
+    // back -- the other way round from the pads SDL names the buttons after.
+    // A button being bound to the game is taken as it is.
+    if (awaiting_.empty() || capture_target(awaiting_)) {
+        if (button == SDL_GAMEPAD_BUTTON_SOUTH) button = SDL_GAMEPAD_BUTTON_EAST;
+        else if (button == SDL_GAMEPAD_BUTTON_EAST) button = SDL_GAMEPAD_BUTTON_SOUTH;
+    }
+#endif
     if (editing_) {
         switch (button) {
         case SDL_GAMEPAD_BUTTON_SOUTH: return edit_key(0);
@@ -1910,7 +2021,7 @@ void Menu::draw(ui::Ui& g, achievements::Tracker& ach) {
     if (page_ == Page::Front)
         draw_front(g);
     else if (page_ == Page::Main)
-        draw_row_page(g, "Left/Right choose  Enter select  Esc close");
+        draw_row_page(g, hint_text("Left/Right choose  Enter select  Esc close"));
     else if (is_showcase())
         draw_showcase(g);
     else if (is_list_page(page_))
@@ -1963,9 +2074,9 @@ void Menu::draw_front(ui::Ui& g) {
     // the plaque would float over the city and the road, and the first press
     // skips to the title and brings the entries up (waiting_for_title).
     const bool waiting = waiting_for_title();
-    const char* hint = waiting ? "Enter skip intro  Esc close" : "Up/Down choose  Enter select  Esc close";
+    const char* hint = waiting ? hint_text("Enter skip intro  Esc close") : hint_text("Up/Down choose  Enter select  Esc close");
     if (g.text_width(kHintFont, hint) + g.px(24) > W - margin * 2)
-        hint = waiting ? "Enter skip intro" : "Up/Down choose  Enter select";
+        hint = waiting ? hint_text("Enter skip intro") : hint_text("Up/Down choose  Enter select");
     const float lh_hint = g.line_height(kHintFont);
     const float hint_h = lh_hint + g.px(12);
     auto draw_hint = [&] {
@@ -2244,7 +2355,7 @@ void Menu::draw_options(ui::Ui& g) {
         need = std::max(need, w);
     }
     g.cap_small_game_scale(0);
-    need = std::max({need, g.text_width(kHintFont, "Up/Down choose  Left/Right change  Esc back"),
+    need = std::max({need, g.text_width(kHintFont, hint_text("Up/Down choose  Left/Right change  Esc back")),
                      g.text_width(ui::Font::PixelBig, pack_heading) +
                          (g.line_height(ui::Font::PixelBig) + g.px(18)) * 0.9f + g.px(40)});
     need = std::ceil(need / g.px(40)) * g.px(40);
@@ -2324,10 +2435,10 @@ void Menu::draw_options(ui::Ui& g) {
     // the marker that says more rows are below.
     const float marker_w = g.px(48);
     const char* hint = page_ == Page::Keys || page_ == Page::StateKeys
-                           ? "Up/Down choose  Enter rebind  Esc back"
-                       : page_ == Page::Mods ? "Up/Down choose  Left/Right on/off  Enter details"
-                       : page_ == Page::Music ? "Up/Down choose  Enter play  Esc back"
-                                             : "Up/Down choose  Left/Right change  Esc back";
+                           ? hint_text("Up/Down choose  Enter rebind  Esc back")
+                       : page_ == Page::Mods ? hint_text("Up/Down choose  Left/Right on/off  Enter details")
+                       : page_ == Page::Music ? hint_text("Up/Down choose  Enter play  Esc back")
+                                             : hint_text("Up/Down choose  Left/Right change  Esc back");
     const float hint_room = column - marker_w - g.px(12);
     int hint_scale = g.small_game_scale();
     for (;; --hint_scale) {
@@ -2681,8 +2792,8 @@ void Menu::draw_showcase(ui::Ui& g) {
     const float lh_hint = g.line_height(kHintFont);
     const float hint_h = lh_hint + g.px(10);
     // As much of it as the width takes, whole phrases only.
-    const char* hint = "Up/Down choose  Left/Right change  Enter start  Esc back";
-    for (const char* shorter : {"Up/Down choose  Left/Right change  Esc back", "Up/Down choose  Left/Right change"})
+    const char* hint = hint_text("Up/Down choose  Left/Right change  Enter start  Esc back");
+    for (const char* shorter : {hint_text("Up/Down choose  Left/Right change  Esc back"), hint_text("Up/Down choose  Left/Right change")})
         if (g.text_width(kHintFont, hint) > W - 2 * M) hint = shorter;
     g.text_fit(kHintFont, M, H - hint_h + (hint_h - lh_hint) * 0.5f - g.px(2), W - 2 * M, hint, faint());
 
@@ -3459,7 +3570,7 @@ void Menu::draw_achievements(ui::Ui& g, achievements::Tracker& ach) {
     }
     const float hint_w = column - (more ? mw * 2 + g.px(16) : 0.0f);
     g.text_fit(kHintFont, x, H - g.line_height(kHintFont) - g.px(10), hint_w,
-               "Up/Down scroll  Enter or Esc back", faint());
+               hint_text("Up/Down scroll  Enter or Esc back"), faint());
 }
 
 } // namespace chaotix

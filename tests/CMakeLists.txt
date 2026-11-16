@@ -20,6 +20,7 @@ add_executable(chaotix_tests
     test_music_mods.cpp
     test_sample_mods.cpp
     test_cheats.cpp
+    test_psg.cpp
     test_volumes.cpp
     test_update_check.cpp
     test_rom_patch.cpp

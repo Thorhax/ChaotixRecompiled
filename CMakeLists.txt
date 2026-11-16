@@ -154,9 +154,12 @@ if(CHAOTIX_GENERATED_SOURCES)
 endif()
 
 # Headless runner: deterministic frame execution, screenshots, validation.
-add_executable(chaotix_headless src/frontend/headless_main.cpp src/frontend/netplay_headless.cpp)
-target_link_libraries(chaotix_headless PRIVATE chaotix_game)
-chaotix_set_warnings(chaotix_headless)
+# (A command line tool: not built for the Switch.)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+    add_executable(chaotix_headless src/frontend/headless_main.cpp src/frontend/netplay_headless.cpp)
+    target_link_libraries(chaotix_headless PRIVATE chaotix_game)
+    chaotix_set_warnings(chaotix_headless)
+endif()
 
 # Windows: UTF-8 as the process code page, so non-ASCII paths work (see the
 # comment in the manifest).
@@ -175,8 +178,14 @@ endif()
 
 # ---------------------------------------------------------------------------
 # SDL3 frontend (desktop and mobile). Platform code is confined to src/platform.
+# The Nintendo Switch has SDL 2 only: platforms/switch/sdl3 gives the frontend
+# the SDL 3 names it uses on top of it (see platforms/switch/README.md).
 # ---------------------------------------------------------------------------
-if(CHAOTIX_BUILD_FRONTEND)
+set(CHAOTIX_SWITCH OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+    set(CHAOTIX_SWITCH ON)
+endif()
+if(CHAOTIX_BUILD_FRONTEND AND NOT CHAOTIX_SWITCH)
     # SDL3: use an installed package, or build it from source (Android/iOS or
     # when -DCHAOTIX_SDL3_SOURCE_DIR=<path to SDL3 checkout> is given).
     if(CHAOTIX_SDL3_SOURCE_DIR)
@@ -202,7 +211,8 @@ if(CHAOTIX_BUILD_FRONTEND)
     else()
         find_package(SDL3_ttf CONFIG REQUIRED)
     endif()
-
+endif()
+if(CHAOTIX_BUILD_FRONTEND)
     # Data the program cannot run without is compiled into the binary rather
     # than looked up on disk: the setup screen runs before any asset directory
     # is known, and an Android APK has no filesystem to put assets in.
@@ -246,6 +256,11 @@ if(CHAOTIX_BUILD_FRONTEND)
         # SDLActivity loads libmain.so and calls SDL_main.
         add_library(chaotix SHARED ${_frontend_sources})
         set_target_properties(chaotix PROPERTIES OUTPUT_NAME main)
+    elseif(CHAOTIX_SWITCH)
+        add_executable(chaotix ${_frontend_sources}
+            platforms/switch/sdl3/sdl3_shim.cpp
+            platforms/switch/switch_threads.cpp)
+        set_target_properties(chaotix PROPERTIES OUTPUT_NAME "ChaotixRecompiled")
     else()
         add_executable(chaotix WIN32 MACOSX_BUNDLE ${_frontend_sources})
         if(CHAOTIX_WINDOWS_MANIFEST)
@@ -266,7 +281,40 @@ if(CHAOTIX_BUILD_FRONTEND)
     endif()
     # The menu's zone pictures are made on a thread of their own (issue #8).
     find_package(Threads REQUIRED)
-    target_link_libraries(chaotix PRIVATE chaotix_game SDL3::SDL3 SDL3_ttf::SDL3_ttf Threads::Threads)
+    if(CHAOTIX_SWITCH)
+        if(NOT DEFINED DEVKITPRO)
+            set(DEVKITPRO /opt/devkitpro)
+        endif()
+        # The SDL 3 stand-in comes before everything else, so <SDL3/SDL.h>
+        # finds it; SDL 2 itself is devkitPro's switch-sdl2 and switch-sdl2_ttf.
+        target_include_directories(chaotix BEFORE PRIVATE ${CMAKE_SOURCE_DIR}/platforms/switch/sdl3)
+        target_include_directories(chaotix PRIVATE ${DEVKITPRO}/portlibs/switch/include)
+        # Desktop-sized stacks for the frontend's threads (switch_threads.cpp).
+        target_link_options(chaotix PRIVATE -Wl,--wrap=pthread_create)
+        target_link_libraries(chaotix PRIVATE
+            chaotix_game Threads::Threads
+            -lSDL2_ttf -lSDL2 -lGLESv2 -lEGL -lglapi -ldrm_nouveau
+            -lfreetype -lharfbuzz -lbz2 -lpng -lz -lnx -lm)
+        # The version the port is at: upstream's, and the port's own number
+        # after it (platforms/switch/README.md). Releases are named
+        # <upstream>-switch.<n>; the homebrew menu has room for 15 letters,
+        # so it shows <upstream>-sw.<n>.
+        set(CHAOTIX_SWITCH_REVISION 1)
+        set(CHAOTIX_SWITCH_VERSION "${PROJECT_VERSION}-sw.${CHAOTIX_SWITCH_REVISION}")
+        # No RomFS: the .nro must never carry the game. Players put their own
+        # ROM on the SD card.
+        nx_generate_nacp(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nacp"
+            NAME "Knuckles' Chaotix Recompiled"
+            AUTHOR "YuutaTsubasa, Switch port by Thorhax"
+            VERSION "${CHAOTIX_SWITCH_VERSION}")
+        nx_create_nro(chaotix
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nro"
+            ICON "${CMAKE_CURRENT_SOURCE_DIR}/platforms/switch/icon.png"
+            NACP "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nacp")
+    else()
+        target_link_libraries(chaotix PRIVATE chaotix_game SDL3::SDL3 SDL3_ttf::SDL3_ttf Threads::Threads)
+    endif()
     chaotix_set_warnings(chaotix)
     if(APPLE)
         # The bundle's Info.plist; scripts/package_apple.sh adds the icon,

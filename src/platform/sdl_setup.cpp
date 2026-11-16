@@ -25,7 +25,7 @@ struct Hit {
     SDL_FRect r{};
     int index = -1;          // candidate index, or one of the actions below
 };
-enum : int { kActionBrowse = -2, kActionInstall = -3, kActionRescan = -4 };
+enum : int { kActionBrowse = -2, kActionInstall = -3, kActionRescan = -4, kActionQuit = -5 };
 
 // What the file dialog hands back. SDL may call file_chosen on another
 // thread, and after the setup screen has gone -- it can finish while the
@@ -96,8 +96,13 @@ void draw(ui::Ui& g, const std::string& store_root, SetupState& st) {
     const float card_gap = g.px(8);
     const float header_h = g.line_height(ui::Font::Title) + g.line_height(ui::Font::Subtitle)
                          + g.px(14) + (g.line_height(ui::Font::Small) + g.px(2)) * 2 + g.px(20);
+#ifdef __SWITCH__
+    const int footer_lines = st.status.empty() ? 2 : 3;
+#else
+    const int footer_lines = 2;
+#endif
     const float footer_h = g.line_height(ui::Font::Body) + g.px(14)     // buttons
-                         + g.line_height(ui::Font::Small) * 2 + g.px(34);
+                         + g.line_height(ui::Font::Small) * float(footer_lines) + g.px(34);
     const int rows = st.candidates.empty() ? 1 : int(st.candidates.size());
     const float room = g.height() - header_h - footer_h - g.px(48);
     st.visible = std::clamp(int(room / (card_h + card_gap)), 1, rows);
@@ -109,13 +114,16 @@ void draw(ui::Ui& g, const std::string& store_root, SetupState& st) {
     g.text(ui::Font::Subtitle, x, y, "Recompiled", ui::theme::accent);
     y += g.line_height(ui::Font::Subtitle) + g.px(14);
 
-    g.text_fit(ui::Font::Small, x, y, column,
-               "This program contains no game data. Choose your own legally obtained",
-               ui::theme::text_dim);
+#ifdef __SWITCH__
+    const char* about[2] = {"This program contains no game data. Put your own legally obtained ROM",
+                            "on the SD card: it is copied into this app's folder, so you only do this once."};
+#else
+    const char* about[2] = {"This program contains no game data. Choose your own legally obtained",
+                            "ROM: it is copied into this app's folder, so you only do this once."};
+#endif
+    g.text_fit(ui::Font::Small, x, y, column, about[0], ui::theme::text_dim);
     y += g.line_height(ui::Font::Small) + g.px(2);
-    g.text_fit(ui::Font::Small, x, y, column,
-               "ROM: it is copied into this app's folder, so you only do this once.",
-               ui::theme::text_dim);
+    g.text_fit(ui::Font::Small, x, y, column, about[1], ui::theme::text_dim);
     y += g.line_height(ui::Font::Small) + g.px(20);
 
     if (st.candidates.empty()) {
@@ -123,7 +131,11 @@ void draw(ui::Ui& g, const std::string& store_root, SetupState& st) {
         g.panel(box, ui::theme::surface, ui::theme::outline, g.px(10));
         g.text_fit(ui::Font::Body, x + g.px(14), y + g.px(10), column - g.px(28),
                    "No ROM found in the usual folders", ui::theme::warn);
-#ifdef SDL_PLATFORM_IOS
+#if defined(__SWITCH__)
+        // The SD card is all there is to choose from, and it is looked at
+        // again every couple of seconds (and on Y).
+        const char* hint = "Copy it to sdmc:/switch/chaotix/ (any name ending .32x, .bin or .md).";
+#elif defined(SDL_PLATFORM_IOS)
         // Nothing can be dropped onto an iPhone app; the Files app can put
         // the ROM into the app's folder, which is searched (Rescan).
         const char* hint = "Copy it to this app's folder with the Files app, or use Browse.";
@@ -172,16 +184,29 @@ void draw(ui::Ui& g, const std::string& store_root, SetupState& st) {
     // Footer: the actions, then the keyboard equivalents, then where it goes.
     float fy = y + g.px(10);
     SDL_FRect b = button(g, st, x, fy, "Install", kActionInstall, !st.candidates.empty(), true);
+#ifdef __SWITCH__
+    // No file dialog on the console; the buttons are there for a finger, and
+    // the line below says which of the Joy-Con's does the same.
+    b = button(g, st, b.x + b.w + g.px(10), fy, "Rescan", kActionRescan, true, false);
+    button(g, st, b.x + b.w + g.px(10), fy, "Quit", kActionQuit, true, false);
+    const char* keys = st.candidates.size() > 1 ? "Up/Down choose    A install    Y rescan    + quit"
+                                                : "A install    Y rescan    + quit";
+#else
     b = button(g, st, b.x + b.w + g.px(10), fy, "Browse", kActionBrowse, true, false);
     button(g, st, b.x + b.w + g.px(10), fy, "Rescan", kActionRescan, true, false);
+    const char* keys = "Enter or (A) install    O browse    R rescan    Esc quit";
+#endif
     fy += b.h + g.px(12);
 
     if (!st.status.empty()) {
         g.text_fit(ui::Font::Small, x, fy, column, st.status, ui::theme::warn);
+#ifdef __SWITCH__
+        // The page is the only place that says what the buttons do.
+        fy += g.line_height(ui::Font::Small) + g.px(4);
+        g.text_fit(ui::Font::Small, x, fy, column, keys, ui::theme::text_faint);
+#endif
     } else {
-        g.text_fit(ui::Font::Small, x, fy, column,
-                   "Enter or (A) install    O browse    R rescan    Esc quit",
-                   ui::theme::text_faint);
+        g.text_fit(ui::Font::Small, x, fy, column, keys, ui::theme::text_faint);
     }
     fy += g.line_height(ui::Font::Small) + g.px(4);
     g.text_fit(ui::Font::Small, x, fy, column, "Installs to " + setup::installed_rom_path(store_root),
@@ -207,8 +232,17 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
 
     auto report_error = [&](const std::string& detail) {
         LOGW("setup", "%s", detail.c_str());
+#ifdef __SWITCH__
+        // No message box on the console: the reason goes on the page itself.
+        (void)window;
+        std::string line = detail;
+        for (char& ch : line)
+            if (ch == '\n') ch = ' ';
+        st.status = "ROM import failed: " + line;
+#else
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "ROM import failed", detail.c_str(), window);
         st.status = "ROM import failed. Choose a verified ROM with Browse or Install.";
+#endif
     };
     if (!initial_error.empty()) report_error(initial_error);
 
@@ -243,11 +277,24 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
 #endif
     };
 
+#ifdef __SWITCH__
+    Uint64 next_look = 0;
+#endif
     for (;;) {
+#ifdef __SWITCH__
+        // HOME then Close: leave at once.
+        if (!appletMainLoop()) return "";
+        // Nothing found yet: look again every couple of seconds, so a ROM
+        // copied over while this page is up (FTP, MTP) appears by itself.
+        if (st.candidates.empty() && SDL_GetTicks() >= next_look) st.rescan = true;
+#endif
         if (st.rescan) {
             st.candidates = setup::scan_candidates(search_dirs);
             st.selected = 0;
             st.rescan = false;
+#ifdef __SWITCH__
+            next_look = SDL_GetTicks() + 2000;
+#endif
         }
 
         SDL_Event e;
@@ -303,6 +350,7 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
                     if (py < hit.r.y || py > hit.r.y + hit.r.h) continue;
                     if (hit.index == kActionBrowse) { browse(); break; }
                     if (hit.index == kActionRescan) { st.rescan = true; break; }
+                    if (hit.index == kActionQuit) return "";
                     const int target = hit.index == kActionInstall ? st.selected : hit.index;
                     if (target < 0 || target >= int(st.candidates.size())) break;
                     // First tap highlights, a tap on the highlighted row (or
@@ -323,7 +371,15 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
                 if (e.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP && st.selected > 0) --st.selected;
                 if (e.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN && st.selected + 1 < int(st.candidates.size())) ++st.selected;
+#ifdef __SWITCH__
+                // The Joy-Con's own letters: A is SDL's east button, Y its
+                // west one. Y looks again, Plus (or B) leaves.
+                if (e.gbutton.button == SDL_GAMEPAD_BUTTON_WEST) { st.status.clear(); st.rescan = true; }
+                if (e.gbutton.button == SDL_GAMEPAD_BUTTON_START || e.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH) return "";
+                if (e.gbutton.button == SDL_GAMEPAD_BUTTON_EAST && !st.candidates.empty()) {
+#else
                 if (e.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH && !st.candidates.empty()) {
+#endif
                     std::string installed = install(st.candidates[size_t(st.selected)].path);
                     if (!installed.empty()) return installed;
                 }
