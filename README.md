@@ -9,6 +9,13 @@ hardware compatibility layer (32X and Mega Drive registers, both VDPs,
 interrupts, timers, sound chips) plus an SDL3 frontend make it an ordinary
 native program on each platform.
 
+How it was made, step by step, with the numbers behind each step: the
+[Recompiled Handbook](https://yuuta-tsubasa.studio/ChaotixRecompiled/)
+(English and Traditional Chinese; its source is [site/index.html](site/index.html)).
+
+Much of it comes from the community's code, reports and ideas: see
+[Credits](#credits) for everyone who helped.
+
 **No game data is included.** You supply your own legally obtained ROM of
 *Knuckles' Chaotix (Japan, USA)* — SHA-1
 `0c2fff7bc79ed26507c08ac47464c3af19f7ced7`. No 32X BIOS is needed. Read
@@ -23,22 +30,19 @@ work; the levels are playable, with sound (Z80 driver, YM2612, PSG and PWM).
 draw real tiles, objects and sprites in the extra area, rather than stretching
 or cropping a 4:3 image. Anything from 1.24:1 (320×240) to 2:1 (480×224) is
 filled — 426×224 at 16:9 — and the centre 320 pixels stay bit-identical to the
-unmodified game, which is checked by a test. Scenes outside levels stay 4:3.
-With **HUD AT EDGE** (Options, on by default) the SCORE/TIME/RINGS display
-moves to the left edge of the wide image instead; turn it off to keep the
-centre exactly as the original draws it.
-
-**Save states**: the pause menu's STATES page saves and loads three slots
-(stored under `States/` in the app's folder). A state only loads with the same
-ROM and version; a test checks that a loaded state runs on identically to the
-machine it was saved from.
+unmodified game, which is checked by a test. The title screen's horizon fills
+the sides too ([issue #77](docs/ISSUE_77_WIDE_TITLE.md)), and so does the rock
+behind DATA LOAD, TRAINING, PLAY STYLE and PLAYER SELECT
+([issue #135](docs/ISSUE_135_WIDE_MENUS.md)); other scenes outside levels stay
+4:3.
 
 | Platform | State |
 |---|---|
 | Windows | built and played (MSYS2 GCC, and MSVC) |
-| Linux / macOS | build configuration present, not yet run by the author |
-| Android | [builds and runs](platforms/android/README.md) (verified on an API 36 emulator) |
-| iOS | build configuration present, not yet built |
+| Linux | build configuration present, not yet run by the author |
+| macOS | [builds and runs](docs/BUILDING_APPLE.md) on Apple Silicon (an M1; every test passes, lockstep bit-identical) |
+| Android | [builds and runs](platforms/android/README.md) (verified on an API 36 emulator); OPTIONS > VIDEO > SHOW FPS shows how fast it runs ([performance notes](docs/PERFORMANCE_ANDROID.md)) |
+| iOS / iPadOS | [builds and runs in the iOS Simulator](docs/BUILDING_APPLE.md); an `.ipa` for sideloading, not yet tried on a device |
 
 [docs/MILESTONES.md](docs/MILESTONES.md) tracks the detail;
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how it is put together. (Those two documents are written in
@@ -73,7 +77,9 @@ environment variable set.
 
 Cross builds (Android, iOS) do not run the recompiler: build once on a host
 with `CHAOTIX_ROM` so `generated/` exists, then configure the target build,
-which picks it up. See [platforms/android/README.md](platforms/android/README.md).
+which picks it up. See [platforms/android/README.md](platforms/android/README.md),
+and [docs/BUILDING_APPLE.md](docs/BUILDING_APPLE.md) for the macOS app and the
+iOS `.ipa` (`scripts/package_apple.sh macos|ios VERSION` on a Mac).
 
 ## Run
 
@@ -83,7 +89,8 @@ build/ChaotixRecompiled
 
 On the first launch a setup page asks for your ROM. It lists the ROMs it can
 find (Downloads, Documents, an `__ROM__` folder next to the executable, the
-app's own folder on Android); you can also drag a file onto the window, press
+app's own folder on Android, the app's Documents on iOS, where the Files app
+can put it); you can also drag a file onto the window, press
 `O` to browse, or tap the on-screen buttons. The file is verified by SHA-1 and
 copied into the app's own folder, so later launches go straight into the game.
 A verified ROM given on the command line (including dragging it onto the
@@ -100,7 +107,11 @@ opens a menu page at startup (so it can be captured without a keyboard;
 `timeattack` is one of them).
 
 Settings live in the user data directory (`Config/chaotix.ini`), saves in
-`SaveData/`, the installed ROM in `Game/`.
+`SaveData/`, the installed ROM in `Game/`. That directory is
+`%APPDATA%\ChaotixRecompiled\ChaotixRecompiled` on Windows,
+`~/.local/share/ChaotixRecompiled/ChaotixRecompiled` on Linux,
+`~/Library/Application Support/ChaotixRecompiled/ChaotixRecompiled` on macOS
+and the app's Documents on iOS (the Files app's On My iPhone > Chaotix).
 
 | Key | Action |
 |---|---|
@@ -112,17 +123,70 @@ Settings live in the user data directory (`Config/chaotix.ini`), saves in
 | F1 / F5 | Debug overlay / overlay page |
 | F2 | Aspect ratio (Auto, 4:3, 16:9, 16:10, 21:9) |
 | F3 / F4 | Filter / scaling mode |
-| F6 | True widescreen on/off (extra columns apply from the next level load) |
+| F6 | True widescreen on/off (applies from the next level load; resizing the window applies at once) |
 | F7 | Achievements (the menu's Awards page) |
 | F11, Alt+Enter | Borderless fullscreen |
-| Tab (hold) | Fast-forward |
+| Tab (hold) | Fast-forward (on a pad, the right trigger; see Fast-forward below) |
+| F8 / F9 | Save state / load state, in the current slot (see Save states and rewind below) |
+| F10 | Next save state slot (1-4) |
+| Backspace (hold) | Rewind (on a pad, the left trigger) |
 | F12 | Screenshot |
+| Home / End | Start / reset a speedrun timer run (see Speedrun tools below) |
 
-The menu is the front end: it is up as soon as the program starts, a screen of
-its own with the game's title art framed on the left and the list beside it —
-START GAME, TIME ATTACK, OPTIONS, CONTROLS, AWARDS, QUIT — over the same picture enlarged
-and dimmed. The art is the game drawing its own title screen, from your ROM,
-so nothing is extracted or shipped.
+The menu is the front end: it is up as soon as the program starts, drawn on the
+game's own title screen, which fills the window as the game does in play. The
+entries — START GAME, TIME ATTACK, LEVEL SELECT, OPTIONS, CONTROLS, MUSIC PLAYER,
+AWARDS, NETPLAY, QUIT — step through the box where the title shows PUSH START,
+the chosen one on a purple plaque between two spinning rings (the game's own,
+from your ROM; issue #134), the others under
+it (on a portrait screen, under the picture) (issue #3;
+[docs/MENU_ART.md](docs/MENU_ART.md)). The title is the
+game drawing its own screen, from your ROM, so nothing is extracted or shipped.
+While the menu is open the title stays, music and all, rather than giving way
+to the attract demo; before PUSH START is up (the intro) only a hint shows, and
+the first press skips to the title.
+
+OPTIONS is split into VIDEO (widescreen, aspect ratio, scaling, screen, menu size),
+SOUND (the volumes), INPUT (touch controls, fast-forward, 6-button pad), EXTRAS (cheats,
+lobby shortcuts, the menu's look, awards, the new version check, and MODS, the mod packs) and GAMEPLAY (the ring
+tether).
+
+New versions (issue #90): at start the program asks GitHub once for this
+project's latest release, on a thread of its own, so a slow or missing network
+never holds up the game. If a newer version is out, a notice says so on the
+title screen and NEW VERSION 0.x.y appears under START GAME; picking it opens
+that release's page with the downloads. Nothing about you or your game is
+sent, just the one request. It does not download or install anything itself;
+on Android the system always asks before an APK is installed, and the iOS build
+is installed by hand. OPTIONS > EXTRAS > CHECK FOR UPDATES (`CheckForUpdates`
+in `[Game]`) turns it off; the change takes effect at the next start.
+
+The menu is written in the game's own font -- the white digits and shaded
+yellow capitals of its TRAINING and DATA LOAD screens -- and shows the game's
+zones behind itself, a different one each time it opens, under a translucent
+coat of that zone's colour. Both are made from your ROM: the font is read
+from it at start-up, and each zone's picture is rendered once by the game
+itself, on a second machine in the background while a menu is open -- it is
+paused whenever you are playing -- (a couple of seconds each on a PC, longer
+on a phone), then kept in the user data folder under
+`Cache/Backdrops`. Until a picture exists the menu is plain. OPTIONS > EXTRAS
+> MENU BACKGROUND picks CYCLE (every zone in turn, the default), one zone
+for good (WORLD ENTRANCE, ISOLATED ISLAND, BOTANIC BASE, MARINA MADNESS,
+SPEED SLIDER, AMAZING ARENA or TECHNO TOWER; only that picture is made), or
+PLAIN. MENU FONT (GAME / PIXEL) and MENU BACKGROUND on PLAIN, `MenuFont` and
+`MenuBackground` in `[Video]`, bring back the earlier look. How it works:
+[docs/MENU_ART.md](docs/MENU_ART.md).
+
+OPTIONS > VIDEO > MENU SIZE makes the menu's rows, letters and panels -- and
+so the area a finger can tap -- larger: NORMAL, LARGE (half as large again)
+or EXTRA LARGE (twice NORMAL). AUTO, the default, is LARGE on phones and
+tablets, where a landscape screen is only a few centimetres tall and
+NORMAL's rows come out a few millimetres high, and NORMAL elsewhere. The
+letters stay on whole pixels: each size takes the game's font up by at least
+a whole step. A page with more rows than fit shows a window of them that
+follows the selection, with a marker where there are more; the pause menu's
+row carries on onto a second line instead of running off the screen. It is
+`MenuSize` (Auto, Normal, Large, ExtraLarge) in `[Video]`.
 
 START GAME hands the game control, and it proceeds into its own menus exactly
 as it would have on the console, so nothing the original offers is out of
@@ -130,7 +194,11 @@ reach. Escape (or the pad's menu button) then brings up a pause menu, which
 adds BACK TO TITLE. The game has no way back to its title screen, so the
 title is copied when control is handed over and put back on the way out;
 anything chosen inside the game's menus is discarded, as it would be by
-turning the console off.
+turning the console off. The save is kept, as the cartridge's battery keeps
+it: progress the game has saved to a DATA slot is there when you come back.
+Progress made with NO SAVE (DATA LOAD's first choice, and the one selected at
+first) only ever lives in memory, so going back to the title loses it, as
+resetting the console would.
 
 TIME ATTACK drops you straight into any level. Knuckles' Chaotix carries a
 complete stage-select screen that the shipped game never reaches (game mode
@@ -150,7 +218,8 @@ out of the game's own tables rather than invented here, and START uses the
 game's own route into a level, so a run behaves exactly as the console would.
 START goes straight there, in about a second: none of the game's own screens
 are passed through, only its level entry (the ball wipe and the BOTANIC BASE
-ticket).
+ticket). A run is played with NO SAVE, as the stage-select screen sets it, so
+it never touches your DATA slots.
 
 Every run is recorded, frame by frame, to `SaveData/last_run.txt`, and
 `chaotix_headless --replay-input` plays one back exactly. It is there because
@@ -167,6 +236,33 @@ afterwards -- so a record reads the same as the time you watched when you
 finished. Two players needs a device for player 2 under
 CONTROLS, which starts as NONE.
 
+GHOST races a translucent copy of a run you made before: BEST (the stage's
+fastest kept, whoever ran it), LAST (the stage's last finished run) or OFF.
+Every finished run without cheats is kept, as a small file in `Ghosts/` in
+the user data folder, and on the next START of the stage the ghost's
+characters run alongside you, half see-through and tinted, from the moment
+the clock starts until the ghost reaches the goal, when its time is shown.
+The game is deterministic, so the ghost is the recorded run's pads replayed
+on a second machine from the moment the stage started; it never changes your
+run. Copy the files to export or import ghosts. It starts as BEST on
+computers, where it costs no frame rate, and OFF on phones, which may not
+have the time for a second game. See [docs/GHOSTS.md](docs/GHOSTS.md).
+
+LEVEL SELECT starts any level the same way, as practice: no clock, no record,
+no ghost, no speedrun split, and no awards, and save states, rewind and
+fast-forward all work. Beside TIME ATTACK's places it offers WORLD ENTRANCE
+(the lobby with all five attractions open), the six SPECIAL STAGEs and the
+BONUS STAGE, with the same AT-TIME, PLAYER, COMBI and PLAYERS. It is NO SAVE
+too, so finishing a level writes nothing to your DATA slots. When the level
+is over -- the game sends you to its lobby, or a special stage ends -- you are
+brought back to the LEVEL SELECT page; in WORLD ENTRANCE you play on until
+you go BACK TO TITLE. Loading a save state from story mode (one with a DATA
+slot) during it lets that game go on as it was. With 1 PLAYER, in the five
+attractions, PARTNER also offers NONE: the level is played alone, as with
+GAMEPLAY > PARTNER SOLO (below), for that level only. The choice is kept
+apart from TIME ATTACK's, in `[LevelSelect]`. See
+[docs/LEVEL_SELECT.md](docs/LEVEL_SELECT.md).
+
 CONTROLS gives each player a device of its own: AUTO (the keyboard and any
 gamepad, which is the default for player 1), the keyboard alone, one gamepad
 by name, or nothing. Each player has its own keyboard set *and* its own
@@ -178,6 +274,11 @@ jumps, B holds your partner still (the game answers with its own HOLD!
 bubble), A pulls the partner in for ten rings, Start pauses. X, Y, Z and Mode
 say NOT USED BY THIS GAME, because they are: pressing them changes neither
 the picture nor the game's state, on the title screen or in a level.
+The triggers can be bound too (pressed past half way), for 6-button pads
+such as the 8BitDo M30 and Retro-Bit's, which report C and Z as the right
+and left triggers. Fast-forward and rewind start on the triggers, so binding
+a game button to one sets that function's pad button to NONE (choose another
+under FAST FORWARD PAD or STATES AND REWIND); one input never does two jobs.
 
 MENU BUTTON is Escape's counterpart on a controller: the emulated 6-button
 pad takes every face and shoulder button, so the choice is among the ones it
@@ -185,7 +286,54 @@ leaves alone - left stick click (the default), right stick click,
 Guide/Home/PS, the touchpad click, or Share/Capture. The same button backs
 out of the menu again.
 
-OPTIONS has RESET AWARDS, which asks twice before locking everything again.
+### Fast-forward
+
+FAST FORWARD KEY (Tab to begin with; press Enter, then the key) and FAST
+FORWARD PAD (the right trigger to begin with; also the left trigger, either
+stick click, Guide/Home/PS, the touchpad click, Share/Capture or NONE -- never
+one the emulated pad uses or a game button is bound to, nor the MENU BUTTON) are on the CONTROLS page.
+OPTIONS > INPUT has the rest:
+
+- TOUCH FAST FORWARD (OFF by default) adds a small fast-forward button to the
+  touch controls, in the top-left corner, which both touch layouts leave
+  empty. Its image is `ff.bmp` in `Mods/Touch`.
+- FAST FORWARD: HOLD (on while held, the default) or TOGGLE (each press turns
+  it on or off; the touch button stays lit while it is on).
+- FAST FORWARD SPEED: 2X and 4X run exactly two or four frames of the game
+  for every frame at the normal pace, and keep the sound -- all of it, played
+  that many times faster, so it is higher but unbroken. MAX (the default, and
+  what Tab always did) runs as fast as the machine allows, up to eight frames
+  for every picture shown, and is silent because it has no steady speed to
+  play the sound at.
+
+Fast-forward only runs more frames of the same game, so the game behaves
+exactly as it would have. It does nothing during a TIME ATTACK run (the touch
+button is not shown either), so every record is set at the game's own speed,
+nor while the menu is open. In the settings file: `FastForwardKey`,
+`FastForwardButton`, `TouchFastForward`, `FastForwardMode` (Hold | Toggle)
+and `FastForwardSpeed` (2x | 4x | Max) in `[Input]`.
+
+### Save states and rewind
+
+The pause menu's STATES page saves and loads the game in one of four slots
+(SLOT), and turns rewind on or off. F8 saves, F9 loads and F10 picks the next
+slot; holding Backspace (or the left trigger) steps back through the last
+minute of play, at twice the game's speed and without sound, and letting go
+plays on from there. CONTROLS > STATES AND REWIND rebinds the keys, gives
+saving and loading a pad button if wanted (none to begin with) and turns on
+an on-screen rewind button (TOUCH REWIND, off to begin with; `rew.bmp` in
+`Mods/Touch`). Rewind is on to begin with on computers and off on phones and
+tablets.
+
+A state is the whole machine, so loading one carries on exactly as the game
+would have from that moment; the cartridge save (the DATA slots) is never put
+back by a load or by rewinding. States are files in `States/` in the user data
+folder and survive restarting the program, but only load with the same ROM,
+ROM patches and version of this program. None of it works during a TIME
+ATTACK run, so a record is always one unbroken run. See
+[docs/SAVE_STATES.md](docs/SAVE_STATES.md).
+
+OPTIONS > EXTRAS has RESET AWARDS, which asks twice before locking everything again.
 
 On-screen touch controls appear once the screen is touched (`TouchControls =
 Auto`), always (`On`), or never (`Off`). Gamepads work through SDL
@@ -194,7 +342,10 @@ LB/North/RB = X/Y/Z, Back = Mode (the game itself only uses three of those --
 see CONTROLS). Every other button belongs to the emulated
 6-button pad, so the menu is on one of the spare buttons (see MENU BUTTON
 above); East/B backs out of it too. On touch devices virtual controls appear
-over the game, and the unlock counter in the top corner opens the menu.
+over the game, with a menu button (three bars) in the top-left corner that
+opens the menu -- RESUME, OPTIONS, BACK TO TITLE and the rest -- as Escape
+does (issue #72); a phone's back button or gesture does the same, and steps
+back out of it. The unlock counter in the other top corner opens AWARDS.
 
 ## Achievements
 
@@ -205,11 +356,259 @@ in `SaveData/achievements.ini`. Nothing is downloaded or uploaded and no
 account is involved. `F7` shows the list; see
 [docs/ACHIEVEMENTS.md](docs/ACHIEVEMENTS.md) to write your own.
 
-Twenty-two of them, 270 points: rings, each of the seven attractions, how far
-in you get, one for each of the seven characters, and one for playing with a
-second player on the partner. The character ones want TIME ATTACK, which is
-how you reach a character the game would otherwise have chosen for you. Each
-was checked by driving the game to it rather than by reading the conditions.
+Twenty-eight of them, 665 points, and none for just playing on: rings
+carried and kept, clears (quick, clean, at night or in the morning, with 100
+rings), each attraction finished, the Chaos Rings, the final battle and the
+ending, and sets built up over many sessions (a level cleared in every
+attraction, as every leader, with every partner), which the list shows the
+progress of. Each was checked by driving the game to it rather than by
+reading the conditions.
+
+## Cheats
+
+OPTIONS > EXTRAS > CHEATS has 99 RINGS and SPEED SHOES, and `[Cheats] Codes` in the
+config takes Action Replay codes (`FFE009:63`). Game Genie codes are not
+supported: they patch the ROM's instructions, which the recompiled code does
+not read. Achievements and time attack records pause while any cheat is on.
+See [docs/CHEATS.md](docs/CHEATS.md).
+
+## Lobby shortcuts
+
+In story mode the game picks your partner (the Combi Catcher in WORLD
+ENTRANCE) and the time of day (it moves on every second level). OPTIONS >
+EXTRAS > LOBBY SHORTCUTS lets you pick them instead, also from the pause menu
+while you walk the lobby:
+
+| Field | What it does |
+| --- | --- |
+| SHORTCUTS | OFF (the default) is the game as it was |
+| PARTNER | CATCHER, or Mighty, Knuckles, Charmy Bee, Vector, Bomb, Heavy or Espio, or NONE |
+| TIME OF DAY | GAME, or Morning, Day, Sunset, Night |
+
+The choice is put into the game each time it starts the lobby or one of the
+five attractions, so the next one you enter has them. Both are things the
+game itself produces, and your progress saves into your DATA slot as usual.
+Choosing your own character as the partner keeps the catcher's. NONE plays
+the attractions alone, as GAMEPLAY > PARTNER SOLO does (below), whatever
+GAMEPLAY says; with any other PARTNER, GAMEPLAY's setting applies. TIME
+ATTACK has its own choices and ignores these. See
+[docs/LOBBY_SHORTCUTS.md](docs/LOBBY_SHORTCUTS.md).
+
+## Speedrun tools
+
+OPTIONS > EXTRAS > SPEEDRUN has an in-game timer, splits and an input display,
+all off to begin with:
+
+| Field | What it does |
+| --- | --- |
+| TIMER | real time (RTA) and game time (IGT, the level clocks added up) of the run |
+| SPLITS | each level finished, with its delta against your best (kept in `Splits/`) |
+| COMPARE | whether splits and the best go by REAL TIME or GAME TIME |
+| INPUT DISPLAY | the pads' buttons, lit while held (both players with two) |
+| TIMER CORNER, INPUT CORNER, OPACITY | where and how they are drawn |
+| START RUN, RESET RUN, and their keys | by hand (Home / End to begin with) |
+
+A run starts by itself when START on DATA LOAD hands over to the game, splits
+on the frame each level's clock stops at the goal, and resets when the game
+goes back to its title screen. `tools/livesplit/ChaotixRecompiled.asl` is a
+LiveSplit auto-splitter that follows the same timer and gives LiveSplit the
+game time. See [docs/SPEEDRUN.md](docs/SPEEDRUN.md) for the definitions, the
+memory block auto-splitters read and the game's RAM addresses.
+
+## Ring tether
+
+The Combi Ring that joins the two characters can be changed in OPTIONS >
+GAMEPLAY (also from the pause menu), in the five attractions' levels:
+
+| Field | What it does |
+| --- | --- |
+| TETHER | NORMAL (the game as it is), WEAK (half the pull) or STRONG (half as much again) |
+| PARTNER | NORMAL; FOLLOW: the ring never holds you back -- it only pulls your partner after you, unless you hold B (HOLD), so the slingshot still works; SOLO: no partner. One player only |
+
+SOLO sends your partner away the way the game does when you are hit
+without rings, and keeps it away: no ring, the camera on you alone, and a
+hit without rings ends the run, as for Sonic. The lifts that wait for both
+characters take you alone. If anything else needs two, hold CALL (A) for
+half a second: your partner comes back for the rest of that life.
+
+NONE as the partner on LEVEL SELECT or in the lobby shortcuts is the same
+SOLO. TIME ATTACK always plays the original tether, and achievements are not
+earned while any of these is changed (NONE included). See
+[docs/RING_TETHER.md](docs/RING_TETHER.md) for how the tether works.
+
+## Netplay (online two-player)
+
+NETPLAY on the front menu plays the game's two-player mode with a friend on
+another machine, with rollback netcode: your buttons act at once (after an
+input delay of 0-4 frames, 2 to begin with), theirs are predicted until they
+arrive, and a wrong guess is put right by running the last few frames again.
+One player chooses HOST A GAME (they are player 1), the other types the
+host's address and chooses JOIN A GAME (player 2); the host's game, saves
+included, is sent over and both play on from there, choosing PLAY STYLE 2P
+in the game. The two games are compared every second, and a difference stops
+the session with DESYNC (both states are written to `Netplay/`).
+
+Both players need the same release, ROM and game-changing mods (patches,
+character stats, replacement music); the joiner takes the host's widescreen,
+pad, lobby and ring tether settings for the session. There is no NAT traversal: the host
+forwards UDP port 7845, or both use a VPN such as Tailscale or ZeroTier.
+Save states, rewind, fast-forward, TIME ATTACK and cheats are off during a
+session. See [docs/NETPLAY.md](docs/NETPLAY.md).
+
+## Volume and touch controls
+
+OPTIONS > SOUND has VOLUME (everything), MUSIC and EFFECTS. The sound driver's sound
+effects take over some of the music's channels while they play, and those
+channels follow EFFECTS for that time; see `src/audio/volumes.h`.
+
+Touch controls can be reskinned: BMP images named after the buttons
+(`dpad.bmp`, `a.bmp` ... `start.bmp`, `ff.bmp`, `menu.bmp`, `button.bmp` for all face buttons,
+`<name>_pressed.bmp` while held) in `Mods/Touch`. The folder holds a
+README.txt that lists them.
+
+OPTIONS > INPUT > TOUCH STICK turns the touch d-pad into a joystick
+(`TouchStick = true` in `[Input]`): the thumb that lands on it keeps it until
+lifted, and steers even after sliding off the base. Its images are
+`stick.bmp` (the base) and `knob.bmp`, each with an optional `_pressed`
+version.
+
+TOUCH LAYOUT (OPTIONS > INPUT, `TouchLayout` in `[Input]`) has CLASSIC,
+every button of the pad, and SONIC CD, the layout of Sonic CD's 2013 mobile
+version: the directions on the left and one large jump button on the right,
+with HOLD (B) and CALL (A) small above it -- the only buttons this game
+uses -- and anywhere else on the lower right of the screen jumping too.
+
+TOUCH OPACITY and PRESSED OPACITY (OPTIONS > INPUT; `TouchOpacity` and
+`TouchPressedOpacity` in `[Input]`) set how opaque the touch controls are at
+rest and while held, custom images included: 65% and 100% by default.
+
+The `Mods` folder is in the user data folder. On Android it is
+`ChaotixRecompiled/Mods` in the phone's storage once you allow it (OPTIONS >
+EXTRAS > MODS > MODS FOLDER opens Android's "All files access" page), and
+`Android/data/org.chaotixrecompiled/files/Mods` until then. On iOS it is
+`Mods` in the app's Documents, which the Files app shows.
+
+In widescreen levels the HUD keeps to the left edge of the picture; OPTIONS >
+VIDEO > WIDE HUD puts it back at its 4:3 place.
+
+As a level starts, the characters glide from the whirlwind to their start
+point instead of jumping there, as they do on the 32X
+([issue #136](docs/ISSUE_136_SMOOTH_START.md)). Only the picture changes, so
+replays, ghosts and netplay are unaffected. OPTIONS > VIDEO > SMOOTH START
+turns it off.
+
+## Mod packs
+
+Every kind of mod below can come as a *pack*: a folder of its own in `Mods`,
+with a `mod.ini` (name, author, version, description, link, preview image)
+and inside it the same `Textures`, `Characters`, `Music`, `Patches` and
+`Touch` folders the `Mods` folder has:
+
+```
+Mods/
+  ChineseText/
+    mod.ini          name = Traditional Chinese / author = ... / version = 1.0.1
+    preview.png
+    Textures/        mdtext_*.txt/.png, 32x_*.png, ...
+  FasterKnuckles/
+    mod.ini
+    Characters/knuckles.ini
+  Textures/          your own loose files, as before
+```
+
+OPTIONS > EXTRAS > MODS lists the packs with their versions: left/right turns
+one on or off, Enter shows its description and preview with MOVE UP and MOVE
+DOWN. Where two enabled packs replace the same thing (a tile, a sprite frame,
+a text pattern, a character's file, a piece of music, a touch button) the
+higher one wins; patches of every enabled pack are applied, the lowest
+first. Loose files in `Mods/Textures`, `Mods/Music`, ... still work, above
+every pack. Graphics, music and touch images change as soon as you leave the
+page (or press RELOAD MODS); patches and character stats the next time the
+game starts. The choices are kept in `[Mods]` in `Config/chaotix.ini`.
+Details, and how to publish a pack on GameBanana:
+[docs/MOD_PACKS.md](docs/MOD_PACKS.md).
+
+## ROM patches
+
+`.ips` and `.bps` files in `Mods/Patches` are applied, in name order, to the
+ROM in memory as the game starts: graphics, palettes and other ROM hacks
+without rebuilding, and without changing your ROM file. A patch that changes
+the game's code works too; that code then runs in the interpreter. Details:
+[docs/ROM_PATCHES.md](docs/ROM_PATCHES.md).
+
+## Graphics replacement
+
+Both layers' graphics can be replaced with PNG files: the Mega Drive layer's
+tiles (backgrounds and level art) and the 32X layer's sprites (the
+characters, the HUD, objects, the title). OPTIONS > EXTRAS > DUMP GRAPHICS
+saves each graphic the game draws to `Mods/Textures/Dump`, as `md_<hash>.png`
+or `32x_<bank>_<frame>.png`; an edited copy in `Mods/Textures` is drawn
+instead, in the game's palette, wherever the game uses it. Only the picture
+changes: the game runs exactly as without the mod. Details:
+[docs/TEXTURE_MODS.md](docs/TEXTURE_MODS.md).
+
+To redraw a whole character, OPTIONS > EXTRAS > EXPORT SPRITES writes every
+frame of each character's sprite banks, without playing, as one sheet per
+bank to `Mods/Textures/Sheets`: `32x_<bank>.png`, the frames side by side in
+a grid, and `32x_<bank>.txt`, where each frame is. A sheet and its `.txt`
+copied into `Mods/Textures` replace every frame of that bank at once; a
+frame's own `32x_<bank>_<frame>.png` still wins over its cell
+(`chaotix_headless --export-sheets DIR` does the same from the command line).
+
+Mega Drive text built from letter tiles (the title menu, OPTIONS, PLAYER
+SELECT, the DATA LOAD banners) can be replaced by *sequence* rather than tile
+by tile, for translations: `mdtext_<name>.txt` names a run of tiles, such as
+the seven of "OPTIONS", and `mdtext_<name>.png` is drawn over that run
+wherever a plane shows it, and nowhere else. With DUMP GRAPHICS on, the runs
+of tiles on each screen are listed in `Mods/Textures/Dump/Text`, with a
+numbered screenshot, ready to copy. Details in
+[docs/TEXTURE_MODS.md](docs/TEXTURE_MODS.md#mega-drive-text-by-tile-sequence-mdtext_nametxt-and-mdtext_namepng).
+Text drawn with Mega Drive sprites (the menu banners' letters, PLAY STYLE,
+SOUND TEST, the 8x16 font's names) is replaced the same way by
+`mdsprite_<name>.txt` + `.png`, naming the group of sprites that shows it;
+the dump lists the sprites on screen in groups as `Dump/Text/sprites_<n>.txt`
+([details](docs/TEXTURE_MODS.md#mega-drive-text-by-sprite-mdsprite_nametxt-and-mdsprite_namepng)).
+
+## Character mods
+
+`Mods/Characters/<name>.ini` (`mighty`, `knuckles`, `charmy`, `vector`,
+`bomb`, `heavy`, `espio`) gives a character new colours (`[Palette]`, its 18
+colours as `#RRGGBB`; Espio's shimmer in `[Cycle]`) and new handling
+(`[Stats]`: acceleration, top speed, gravity, jump and more, by name).
+Colours change only the picture; stats change the game, and take effect the
+next time it starts. With new sprites in `Mods/Textures`, Mighty can become
+someone else entirely. Details: [docs/CHARACTER_MODS.md](docs/CHARACTER_MODS.md).
+
+## Music replacement
+
+Put WAV files in `Mods/Music` (see above for where `Mods` is),
+named after the game's music id in hex: `05.wav` replaces BOTANIC BASE's
+music. The game's sound effects still play. Loops come from the WAV's sampler
+chunk or a `05.loop` text file, and `ModMusicVolume` in `[Audio]` sets their
+level. A file starts from its beginning whenever the game asks for the piece,
+as the game's own music does. Every music request is logged with its id, so
+playing the game shows which file to make; see [docs/MUSIC_MODS.md](docs/MUSIC_MODS.md). Only music
+you have the right to use, please.
+
+The music's drums can be replaced one at a time instead: WAV files in
+`Mods/Samples`, named after the 32X sample's number in hex (`00.wav` is the
+bass drum), play in place of the game's 11 kHz 8-bit samples, at each note's
+volume and the level of the sample they replace.
+`chaotix_headless --dump-pwm-samples DIR` writes the game's own; see
+[docs/SAMPLE_MODS.md](docs/SAMPLE_MODS.md).
+
+## Music player
+
+MUSIC PLAYER (on the front end, and under OPTIONS > SOUND, so from the pause
+menu too) is the game's sound test with its songs' names: the 41 tracks the
+game's own SOUND TEST lists, DOOR INTO SUMMER to DECISION 2ND, read from the
+ROM. PLAY, STOP, NEXT, PREVIOUS and FADE OUT; REPEAT loops the track, plays it
+once or plays the whole list, and FADE OUT AFTER fades out a track that would
+otherwise loop for ever. The music is the game's own FM, PSG and PWM, played by
+a second copy of the game booted to a quiet screen; a track a music mod
+replaces says REPLACED BY MOD and plays the mod's file. While the page is
+open your game is held, untouched, and it carries on when you leave. See
+[docs/MUSIC_PLAYER.md](docs/MUSIC_PLAYER.md).
 
 ## Tools
 
@@ -228,7 +627,30 @@ was checked by driving the game to it rather than by reading the conditions.
   asks the game to start a level the way the front end's TIME ATTACK does, and
   `--replay-input` plays back a session the program recorded with
   `--record-input`, so that something only a person can do — finishing a level,
-  say — can be studied here as often as needed.
+  say — can be studied here as often as needed. `--level-select` makes the
+  requests LEVEL SELECT ones and prints the scene reached and when the level
+  is over (`--level-select-none`: with PARTNER NONE). `--lobby-partner ID|none` and
+  `--lobby-time 0-3` stand in for the lobby shortcuts' choices.
+- `chaotix_headless --ghost-record FILE` writes a `--stage` or replayed run
+  as a TIME ATTACK ghost when it ends, and `--ghost FILE` races one, drawn
+  into the shots (`--ghost-log N` prints where it is; docs/GHOSTS.md).
+- `chaotix_headless --jukebox TRACK:FRAMES --wav FILE` renders a track with
+  the music player (`--jukebox-list` lists the tracks; `--jukebox-at
+  FRAME:TRACK:FRAMES` opens it in the middle of a run; docs/MUSIC_PLAYER.md).
+- `chaotix_headless --speedrun` follows the session with the speedrun timer
+  (`--speedrun-start FRAME` starts a run by hand) and prints its starts,
+  splits and resets; `--input-display` draws the input display into the shots
+  (docs/SPEEDRUN.md).
+- `chaotix_headless --save-state FRAME:FILE` writes a save state after that
+  frame and `--load-state FILE` starts from one (the run then goes on to
+  `--frames`); `--state-hash-every N` prints a fingerprint of the whole
+  machine and `--rewind INTERVAL[:MB]` times the rewind buffer and checks
+  every snapshot it holds (docs/SAVE_STATES.md).
+- `chaotix_headless --netplay-loopback LATENCY:JITTER:LOSS` plays both sides
+  of a netplay session in one process over a simulated network with fuzzed
+  pads, and checks both end identical to a single machine fed the confirmed
+  pads; `--netplay-host PORT` / `--netplay-join ADDRESS` do it over real UDP,
+  one side per process (docs/NETPLAY.md).
 
 ## Tests
 
@@ -249,6 +671,132 @@ Coverage traces for the recompiler are recorded with
 The screens the program draws itself (first-run setup, achievements) use
 Inter, which is compiled into the executable so they work before anything has
 been installed. See [THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Credits
+
+Knuckles' Chaotix Recompiled is made by YuutaTsubasa, with the help of the
+people below. Thank you all: every report here led to a fix or a feature.
+
+### Code
+
+- **[shinmagus](https://github.com/shinmagus)**: the OPTIONS > SCALING label
+  ([#14](https://github.com/YuutaTsubasa/ChaotixRecompiled/pull/14)),
+  non-ASCII file and folder names on Windows
+  ([#15](https://github.com/YuutaTsubasa/ChaotixRecompiled/pull/15)), closing
+  the front menu handing the game over
+  ([#16](https://github.com/YuutaTsubasa/ChaotixRecompiled/pull/16)), and
+  install error messages ([#17](https://github.com/YuutaTsubasa/ChaotixRecompiled/pull/17)).
+
+### Art
+
+- The app icon is the game's logo (Sega / Sonic Team), from
+  [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Knuckles%27_Chaotix_logo.webp).
+- Up to 0.6.1 the icon was pixel art of Knuckles by **Cotton_Candy_2C**, from
+  [SteamGridDB](https://www.steamgriddb.com/icon/22213), suggested by
+  **[Abdouxgo](https://github.com/Abdouxgo)**
+  ([#22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22)).
+
+### Reports and ideas
+
+- **[Nickwastakenwastaken](https://github.com/Nickwastakenwastaken)**: ROM
+  loading ([#2](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/2)).
+- **[sloppydoppies](https://github.com/sloppydoppies)**: the front end, achievements,
+  mod support and audio, which led to music replacement, and separate volumes
+  ([#3](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/3),
+  [#24](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/24)).
+- **[Pokefan2098](https://github.com/Pokefan2098)**: ROM verification and
+  rendering bugs ([#4](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/4),
+  [#5](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/5)).
+- **[blueeeLove](https://github.com/blueeeLove)**: widescreen special stages
+  ([#6](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/6),
+  [#18](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/18)).
+- **[SegaSaturnFan](https://github.com/SegaSaturnFan)**: widescreen dropping to
+  4:3 ([#7](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/7)) and
+  Marina Madness's clouds and sea in widescreen
+  ([#36](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/36)).
+- **[datadrivezz](https://github.com/datadrivezz)**: the touch menus,
+  touch control opacity, ROM patches and suggestions for the mobile build
+  ([#8](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/8),
+  [#9](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/9),
+  [#33](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/33),
+  [#35](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/35)).
+- **[mechasalesman](https://github.com/mechasalesman)**: widescreen in the
+  lobby, and cheats ([#13](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/13),
+  [#20](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/20)).
+- **[Abdouxgo](https://github.com/Abdouxgo)**: 32-bit Android, the icon
+  suggestion, and replaced music starting over when the game asks for it again
+  ([#19](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/19),
+  [#22](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/22),
+  [#143](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/143)).
+- **[ZacOnGH](https://github.com/ZacOnGH)**: the Linux build
+  ([#23](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/23)).
+- **[CooliKnucx](https://github.com/CooliKnucx)**: touch control images, the
+  menu size and the level select
+  ([#25](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/25),
+  [#49](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/49),
+  [#51](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/51)).
+- **[rsomethin](https://github.com/rsomethin)**: settings lost on mobile
+  ([#26](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/26)).
+- **[HickySnow](https://github.com/HickySnow)**: special stage progress in
+  widescreen ([#27](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/27)).
+- **[lemanrush](https://github.com/lemanrush)**: the HUD at the widescreen
+  edge, choosing the menu background, widescreen bonus stages and special
+  stage results, the new version notice, the game's ring as the menu
+  cursor, the menus' rock in widescreen and the glide into a level's start ([#28](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/28),
+  [#37](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/37),
+  [#38](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/38),
+  [#39](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/39),
+  [#90](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/90),
+  [#134](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/134),
+  [#135](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/135),
+  [#136](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/136)).
+- **[DoodleDiskette](https://github.com/DoodleDiskette)**: a reachable Mods
+  folder on Android ([#29](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/29)).
+- **[stuffinix](https://github.com/stuffinix)**: the touch joystick
+  ([#30](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/30)).
+- **[DanKorell](https://github.com/DanKorell)**: the lines in the menu text
+  ([#5](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/5)).
+- **[Heartic12](https://github.com/Heartic12)**: the special stage lag on a
+  slow PC ([#31](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/31)).
+- **[blueeeLove](https://github.com/blueeeLove)**: the Sonic CD touch layout
+  ([#34](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/34)).
+- **[TramplinStu](https://github.com/TramplinStu)**: choosing no partner
+  ([#55](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/55)).
+- **[iisonic707ii-spec](https://github.com/iisonic707ii-spec)**: the special
+  stage's black lines and its widescreen in play, and bonus stages entered
+  from a level staying 4:3, and the final boss widened by WIDE LOBBY
+  ([#21](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/21),
+  [#52](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/52),
+  [#56](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/56)).
+- **[ToastedSquidBread](https://www.youtube.com/watch?v=dXHWI-o2v1I)**: a video
+  review that found the HUD jumping at the start of a level, black bars on the
+  way into the special stage, and Knuckles dropping out of a glide when
+  turning round on a keyboard
+  ([#91](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/91),
+  [#92](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/92),
+  [#93](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/93)).
+- **[UsagiJojo's World Updates](https://x.com/UsagijojoVRC)**: pointed us to
+  that review.
+- **[GamerG](https://x.com/therealgamerg)**: asked whether the music's drums could be played from cleaner
+  recordings, which became the drum sample mods
+  ([PR #110](https://github.com/YuutaTsubasa/ChaotixRecompiled/pull/110)).
+- **[CaptainLibrary](https://github.com/CaptainLibrary)**: binding the
+  triggers to the game's buttons, for pads that report C and Z as triggers
+  ([#113](https://github.com/YuutaTsubasa/ChaotixRecompiled/issues/113)).
+
+### Thanks also to
+
+- [Sonic Retro](https://info.sonicretro.org/Knuckles%27_Chaotix), whose list
+  of cheat codes the built-in cheats come from.
+- PicoDrive, ares, MAME and Genesis Plus GX, used as references while
+  checking the 32X and Mega Drive behaviour (no code taken; see the notes in
+  `docs/`).
+- Third-party libraries and fonts: see [THIRD_PARTY.md](THIRD_PARTY.md).
+
+*Knuckles' Chaotix* is a trademark of Sega; this project is not affiliated
+with Sega. See [LEGAL.md](LEGAL.md).
+
+Contributed and not listed, or want a different name or link? Open an issue.
 
 ## Contributing
 

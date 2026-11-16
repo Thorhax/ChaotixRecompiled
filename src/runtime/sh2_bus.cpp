@@ -1,7 +1,11 @@
 // SH-2 address space and the 32X system registers (shared with the 68K side).
 #include "system.h"
+#include "divide.h"
 #include "patches.h"
+#include "audio/pwm_samples.h"
 #include "log.h"
+#include "sprite_record.h"
+#include <climits>
 #include <cstring>
 
 namespace chaotix {
@@ -27,7 +31,63 @@ inline void be_write(uint8_t* p, uint32_t v, int size) {
     p[0] = uint8_t(v >> 24); p[1] = uint8_t(v >> 16); p[2] = uint8_t(v >> 8); p[3] = uint8_t(v);
 }
 
+// Code ranges [first, second) as one bit per byte of an area of `bytes`.
+std::vector<uint8_t> code_bits(const std::vector<std::pair<uint32_t, uint32_t>>& ranges, uint32_t bytes) {
+    std::vector<uint8_t> bits(bytes / 8, 0);
+    for (const auto& r : ranges)
+        for (uint32_t o = r.first; o < r.second && o < bytes; ++o) bits[o >> 3] |= uint8_t(1u << (o & 7));
+    return bits;
+}
+
+// Whether a write of `size` bytes at `off` touches a code byte: what a write
+// overlapping one of the ranges was.
+inline bool code_hit(const std::vector<uint8_t>& bits, uint32_t off, int size) {
+    for (uint32_t o = off; o < off + uint32_t(size); ++o)
+        if ((o >> 3) < bits.size() && (bits[o >> 3] >> (o & 7) & 1)) return true;
+    return false;
+}
+
+// Whether writing `v` (`size` bytes) at `p` changes what is there.
+inline bool changes(const uint8_t* p, uint32_t v, int size) {
+    const uint32_t mask = size == 4 ? 0xFFFFFFFFu : (1u << (8 * size)) - 1;
+    return be_read(p, size) != (v & mask);
+}
+
 } // namespace
+
+void Machine::code_ranges_changed() {
+    sdram_code_bits = code_bits(sdram_code_ranges, 0x40000);
+    cache_code_bits = code_bits(cache_code_ranges, 0x1000);
+}
+
+void Machine::set_sdram_code_owners(const std::vector<CodeOwner>& owners, size_t functions) {
+    sh2_fn_code_writes.assign(functions, 0);
+    const uint32_t chunks = 0x40000u >> kCodeChunkShift;
+    code_owner_at_.assign(chunks + 1, 0);
+    code_owners_.clear();
+    for (uint32_t k = 0; k < chunks; ++k) {
+        code_owner_at_[k] = uint32_t(code_owners_.size());
+        const uint32_t lo = k << kCodeChunkShift, hi = lo + (1u << kCodeChunkShift);
+        for (const CodeOwner& o : owners)
+            if (o.lo < hi && o.hi > lo && o.fn < functions) code_owners_.push_back(o);
+    }
+    code_owner_at_[chunks] = uint32_t(code_owners_.size());
+}
+
+// A write at SDRAM offset `off` changed a code byte: counts it for every
+// function whose code it overlaps.
+void Machine::sdram_code_written(uint32_t off, int size) {
+    if (code_owner_at_.empty()) return;
+    const uint32_t end = off + uint32_t(size);
+    const uint32_t k0 = off >> kCodeChunkShift, k1 = (end - 1) >> kCodeChunkShift;
+    for (uint32_t k = k0; k <= k1; ++k)
+        for (uint32_t i = code_owner_at_[k]; i < code_owner_at_[k + 1]; ++i) {
+            const CodeOwner& o = code_owners_[i];
+            // Counted once even when a write spans two chunks of one range.
+            if (off < o.hi && end > o.lo && (k == k0 || o.lo >= (k << kCodeChunkShift)))
+                if (++sh2_fn_code_writes[o.fn] == 0) ++sdram_code_epoch;  // wrapped: check everything
+        }
+}
 
 void Machine::remap_sh2() {
     for (int cpu = 0; cpu < 2; ++cpu) {
@@ -50,6 +110,15 @@ void Machine::remap_sh2() {
         // Cartridge ROM 0x02000000-0x023FFFFF
         for (uint32_t off = 0; off < 0x400000; off += pg)
             b.rpage[sh2::page_of(0x02000000 + off)] = rom.data.data() + (off & (rom.data.size() - 1));
+        // The cache data array (area 6), as sh2_read/sh2_write treat it;
+        // granules holding recompiled code are written through sh2_write,
+        // which notes changes to that code.
+        uint8_t* cd = onchip[cpu].cache_data;
+        b.cache = cd;
+        const uint32_t gran = 1u << sh2::Bus::kCacheGranuleShift;
+        for (uint32_t off = 0; off < 0x1000; off += gran)
+            b.cache_w[off >> sh2::Bus::kCacheGranuleShift] = code_hit(cache_code_bits, off, int(gran)) ? nullptr : cd + off;
+        b.code_writes = sh2_fn_code_writes.empty() ? nullptr : sh2_fn_code_writes.data();
     }
 }
 
@@ -65,7 +134,9 @@ uint32_t Machine::fb_read(uint32_t off, int size) {
 void Machine::fb_write(uint32_t off, uint32_t v, int size, bool overwrite) {
     off &= 0x1FFFF;
     if (on_fb_write) on_fb_write(on_fb_write_user, off, v, size, overwrite);
+    if (sprites && sprites->tracks_writes()) sprites->fb_write(*this, off, v, size, overwrite);
     uint8_t* fb = mars.fb[mars.fb_display ^ 1];
+    if (wide_special) { fb_write_special(fb, off, v, size, overwrite); return; }
     if (!overwrite) { be_write(fb + off, v, size); return; }
     if (wide_active) { fb_write_wide(fb, off, v, size); return; }
     // Overwrite image: zero bytes are transparent (not written).
@@ -88,6 +159,42 @@ void Machine::fb_write_wide(uint8_t* fb, uint32_t off, uint32_t v, int size) {
         const bool off_line = fline < 0 || fline >= kActiveLines;
         if (off_line || (uint32_t(rel) & (patches::kFbLineStride - 1)) >= uint32_t(kNativeWidth)) shadow[o] = b;
         else fb[o] = b;
+    }
+}
+
+// The widened special stage (see patches.h): polygon pixels (everything but
+// the overwrite image) are moved back by the shift its projection was given,
+// and every byte outside the native columns of a line goes to the margin
+// shadow.
+bool Machine::fb_in_margin(uint32_t o) {
+    const int32_t rel = int32_t(o) - int32_t(patches::kFbLineBase);
+    const int fline = rel >= 0 ? rel / int32_t(patches::kFbLineStride) : -1;
+    return fline < 0 || fline >= kActiveLines ||
+           (uint32_t(rel) & (patches::kFbLineStride - 1)) >= uint32_t(kNativeWidth);
+}
+
+// A byte of one of the frame buffer's picture lines (line table entry y at
+// 0x200 + 0x200 * y, 224 of them), as opposed to the header before them or
+// the space after them.
+bool Machine::fb_in_picture(uint32_t o) {
+    return o >= patches::kFbLineBase && o < patches::kFbLineBase + patches::kFbLineStride * uint32_t(kActiveLines);
+}
+
+void Machine::fb_write_special(uint8_t* fb, uint32_t off, uint32_t v, int size, bool overwrite) {
+    uint8_t* shadow = fb_margin[mars.fb_display ^ 1];
+    for (int i = 0; i < size; ++i) {
+        const uint8_t b = uint8_t(v >> (8 * (size - 1 - i)));
+        if (overwrite && !b) continue;  // overwrite image: zero bytes are transparent
+        const uint32_t raw = (off + uint32_t(i)) & 0x1FFFF;
+        if (!fb_in_picture(raw)) {
+            // Not a picture line: the line table, and the words the 68K and
+            // the SH-2 pass each other there (the stage's result at $1FE,
+            // issue #27). Written as the hardware would.
+            fb[raw] = b;
+            continue;
+        }
+        const uint32_t o = (raw - (overwrite ? 0u : uint32_t(special_shift))) & 0x1FFFF;
+        (fb_in_margin(o) ? shadow : fb)[o] = b;
     }
 }
 
@@ -141,6 +248,38 @@ uint32_t Machine::vdp32x_read(int who, uint32_t off) {
     }
 }
 
+int32_t Machine::sh2_read_stable_to(int cpu, uint32_t a, int size, int32_t at) const {
+    // Only the 32X VDP registers, $4100-$41FF (mirrored every 16 bytes): reads
+    // have no side effects, and only CPUs write them, so in one CPU's slice
+    // nothing changes them but time, through the status word ($A): HBLK and
+    // PEN follow the reader's own position in the line (vdp32x_read).
+    // (Memory and the COMM ports, whose reads never change in a slice, are
+    // recomp::sh2_pure_load's.)
+    if ((a >> 29) > 1 || !sh2_slice_[cpu].running) return at;
+    const uint32_t p = a & 0x1FFFFFFF;
+    if (p < 0x4100 || p + uint32_t(size) > 0x4200) return at;
+    // Only the status word's upper byte changes (the lower one holds FS).
+    const bool status_high = (p & 0xF) == 0xA || (size == 4 && (p & 0xE) == 0x8);
+    if (!status_high) return INT32_MIN;
+    // The status word is a function of hblank alone within a slice (`line`,
+    // the frame buffer and the bitmap mode stay as they are), and hblank
+    // (pos >= 2600 || pos < 0) changes as pos passes 0 and then 2600.
+    const SliceInfo& s = sh2_slice_[cpu];
+    const uint64_t done = s.base + uint64_t(int64_t(s.budget) - at);  // SH-2 clock at `at`
+    const int64_t pos = int64_t(done * 7 / 3) - int64_t(line_start_mclk);
+    int64_t edge;
+    if (pos < 0) edge = 0;
+    else if (pos < 2600) edge = 2600;
+    else return INT32_MIN;
+    // The SH-2 clock x reaches the edge when x * 7 / 3 >= line_start + edge,
+    // i.e. x >= ceil(3 * (line_start + edge) / 7); one before that is the
+    // last clock with the value read at `at`.
+    const uint64_t n = 3 * (line_start_mclk + uint64_t(edge));
+    const uint64_t x_last = div_const<7>(n + 6) - 1;
+    const int64_t c_last = int64_t(s.base) + int64_t(s.budget) - int64_t(x_last);
+    return c_last < int64_t(INT32_MIN) ? INT32_MIN : int32_t(c_last);
+}
+
 void Machine::vdp32x_write(uint32_t off, uint32_t v, int size) {
     // Byte writes land in the addressed half of the word register.
     auto merge = [&](uint16_t& reg) {
@@ -162,6 +301,48 @@ void Machine::vdp32x_write(uint32_t off, uint32_t v, int size) {
         uint8_t* fb = mars.fb[mars.fb_display ^ 1];
         uint32_t addr = mars.fill_addr;
         if (on_fb_fill) on_fb_fill(on_fb_write_user, addr, mars.fill_len + 1u, mars.fill_data);
+        if (sprites && sprites->tracks_writes()) sprites->fb_fill(*this, addr, mars.fill_len + 1u, mars.fill_data);
+        if (wide_special) {
+            uint8_t* shadow = fb_margin[mars.fb_display ^ 1];
+            if (patches::is_widened_clear(*this, addr, mars.fill_len + 1u, mars.fill_data)) {
+                // The scene's clear (see patches.h): the whole widened line.
+                const uint32_t line = (addr & 0xFF00) * 2u;
+                for (int x = -patches::kMaxWideExtra; x < kNativeWidth + patches::kMaxWideExtra; ++x) {
+                    const uint32_t o = (line + uint32_t(x)) & 0x1FFFF;
+                    (fb_in_margin(o) ? shadow : fb)[o] = uint8_t((o & 1) ? mars.fill_data : mars.fill_data >> 8);
+                }
+                mars.fill_addr = uint16_t((addr & 0xFF00) | ((addr + mars.fill_len + 1u) & 0xFF));
+                break;
+            }
+            // A polygon span: moved back by the projection's shift (even),
+            // with the margins going to the shadow (see patches.h).
+            for (uint32_t i = 0; i <= mars.fill_len; ++i) {
+                const uint32_t raw = ((addr & 0xFFFF) * 2) & 0x1FFFF;
+                const bool picture = fb_in_picture(raw);
+                const uint32_t o = picture ? ((raw - uint32_t(special_shift)) & 0x1FFFF) : raw;
+                uint8_t* dst = picture && fb_in_margin(o) ? shadow : fb;
+                dst[o] = uint8_t(mars.fill_data >> 8);
+                dst[o + 1] = uint8_t(mars.fill_data);
+                addr = (addr & 0xFF00) | ((addr + 1) & 0xFF);
+            }
+            mars.fill_addr = uint16_t(addr);
+            break;
+        }
+        if (!wide_active) {
+            // The same words as the loop below, as at most two runs: from
+            // the start address to the end of its 256-word line, then from
+            // the line's start (the address wraps inside the line).
+            const uint32_t n = mars.fill_len + 1u, base = addr & 0xFF00, lo = addr & 0xFF;
+            const uint32_t first = n < 256 - lo ? n : 256 - lo;
+            const uint8_t hi8 = uint8_t(mars.fill_data >> 8), lo8 = uint8_t(mars.fill_data);
+            auto run = [&](uint8_t* p, uint32_t words) {
+                for (uint32_t i = 0; i < words; ++i, p += 2) { p[0] = hi8; p[1] = lo8; }
+            };
+            run(fb + (base | lo) * 2, first);
+            run(fb + base * 2, n - first);
+            mars.fill_addr = uint16_t(base | ((lo + n) & 0xFF));
+            break;
+        }
         for (uint32_t i = 0; i <= mars.fill_len; ++i) {
             uint32_t o = (addr & 0xFFFF) * 2;
             fb[o] = uint8_t(mars.fill_data >> 8);
@@ -179,7 +360,10 @@ void Machine::vdp32x_write(uint32_t off, uint32_t v, int size) {
         mars.fb_select_req = reg & 1;
         if (line >= kActiveLines || (mars.bitmap_mode & 3) == 0) {
             // In V-blank (or display blanked) the swap happens immediately.
-            if (mars.fb_display != mars.fb_select_req) mars.fb_display = mars.fb_select_req;
+            if (mars.fb_display != mars.fb_select_req) {
+                mars.fb_display = mars.fb_select_req;
+                if (sprites) sprites->flipped(*this);
+            }
         }
         break;
     }
@@ -293,16 +477,7 @@ uint32_t Machine::mars_read(int who, uint32_t addr, int size) {
     if (off >= 0x200) return mars.pal[(off - 0x200) >> 1];
     if (off >= 0x100) return vdp32x_read(who, off);
     if (off >= 0x30 && off < 0x40) return pwm_read(off);
-    if (off >= 0x20 && off < 0x30) {
-        uint16_t v = mars.comm[(off - 0x20) >> 1];
-        if (off == 0x22 && who < 0) {
-            uint32_t pc = m68k.pc & 0xFFFFFF;
-            if ((pc == 0x004FE8 || pc == 0x004FEE || pc == 0x004C22 || pc == 0x004C28) && (mars.comm[0] & 0xFF00) == 0) {
-                v |= 0x0001;
-            }
-        }
-        return v;
-    }
+    if (off >= 0x20 && off < 0x30) return mars.comm[(off - 0x20) >> 1];
     switch (off) {
     case 0x00:
         if (who < 0) return (mars.adapter_ctrl & 0x8003) | 0x0080;  // REN=1
@@ -386,6 +561,22 @@ void Machine::mars_write(int who, uint32_t addr, uint32_t v, int size) {
     if (woff >= 0x20 && woff < 0x30) {
         uint16_t& c = mars.comm[(woff - 0x20) >> 1];
         c = merge16(c);
+        if (who < 0 && woff >= 0x28) {
+            // The PWM notes the 68K passes on ($8F6EFA), kept for the music
+            // player's keyboards (issue #102): the SH-2 takes them at once.
+            const uint32_t at = (woff - 0x28) & ~1u;
+            pwm_notes[at] = uint8_t(c >> 8);
+            pwm_notes[at + 1] = uint8_t(c);
+            ++pwm_note_writes;
+            // A sample a file replaces: the host plays the file, and the
+            // voice is given the game's silent sample, which stops what it
+            // was playing as the note would have (audio/sample_mods.h).
+            if (pwm_replacing && c && (size == 2 || (woff & 1))) {
+                if (pwm_events.size() < 256) pwm_events.push_back({m68k_now_mclk(), uint8_t(at >> 1), c});
+                if ((c & 0xFF) < pwm_replaced.size() && pwm_replaced[c & 0xFF])
+                    c = uint16_t((c & 0xFF00) | audio::pwm::kSilence);
+            }
+        }
         return;
     }
     switch (woff) {
@@ -478,9 +669,8 @@ void Machine::sh2_write(int cpu, uint32_t a, uint32_t v, int size) {
         if (p >= 0x04000000 && p < 0x06000000) { fb_write(p & 0x1FFFF, v, size, (p & 0x20000) != 0); return; }
         if (p >= 0x06000000 && p < 0x08000000) {
             uint32_t off = p & 0x3FFFF;
+            if (code_hit(sdram_code_bits, off, size) && changes(sdram + off, v, size)) sdram_code_written(off, size);
             be_write(sdram + off, v, size);
-            for (const auto& r : sdram_code_ranges)
-                if (off < r.second && off + uint32_t(size) > r.first) { ++sdram_code_epoch; break; }
             return;
         }
         CHAOTIX_LOG_LIMITED(LogLevel::Debug, "sh2", 32, "SH2%c unmapped write%d %08X=%X", cpu ? 'S' : 'M', size * 8, a, v);
@@ -490,9 +680,9 @@ void Machine::sh2_write(int cpu, uint32_t a, uint32_t v, int size) {
     if (area == 3) return;  // cache address array
     if (area == 6) {
         uint32_t off = a & 0xFFF;
-        be_write(onchip[cpu].cache_data + off, v, size);
-        for (const auto& r : cache_code_ranges)
-            if (off < r.second && off + uint32_t(size) > r.first) { ++cache_code_epoch[cpu]; break; }
+        uint8_t* q = onchip[cpu].cache_data + off;
+        if (code_hit(cache_code_bits, off, size) && changes(q, v, size)) ++cache_code_epoch[cpu];
+        be_write(q, v, size);
         return;
     }
     if (a >= 0xFFFFFE00) { onchip_write(cpu, a, v, size); return; }

@@ -1,4 +1,5 @@
 #include "ym2612.h"
+#include "audio/gain_ramp.h"
 #include <algorithm>
 #include <cmath>
 
@@ -54,9 +55,6 @@ const int kLfoPeriod[8] = {108, 77, 71, 67, 62, 44, 8, 5};
 const double kPmCents[8] = {0, 3.4, 6.7, 10, 14, 20, 40, 80};
 const int kAmShift[4] = {8, 3, 1, 0};
 
-// DAC zero-crossing discontinuity, in 9-bit DAC steps.
-constexpr int32_t kLadderStep = 7;
-
 inline int keycode(uint16_t fnum, uint8_t block) {
     int n4 = (fnum >> 10) & 1, n3 = (fnum >> 9) & 1, n2 = (fnum >> 8) & 1, n1 = (fnum >> 7) & 1;
     int note = (n4 << 1) | ((n4 & (n3 | n2 | n1)) | ((n4 ^ 1) & n3 & n2 & n1));
@@ -83,6 +81,23 @@ void Ym2612::reset() {
 }
 
 uint8_t Ym2612::read_status() const { return status_ & 3; }
+
+Ym2612::Voice Ym2612::voice(int ch) const {
+    Voice v;
+    const Ch& c = ch_[ch];
+    if (ch == 5 && dac_en_) return v;
+    // The operators the algorithm sends to the output, bit i for op[i].
+    static const uint8_t kCarriers[8] = {0x8, 0x8, 0x8, 0x8, 0xA, 0xE, 0xE, 0xF};
+    int quietest = 0x3FF;
+    for (int i = 0; i < 4; ++i) {
+        v.on = v.on || c.op[i].key;
+        if (kCarriers[c.alg & 7] & (1 << i)) quietest = std::min(quietest, std::min(0x3FF, c.op[i].env + (c.op[i].tl << 3)));
+    }
+    // F = fnum x (YM clock / 144) x 2^(block - 1) / 2^20.
+    v.hz = double(c.fnum) * (7670453.0 / 144.0) * std::ldexp(1.0, int(c.block) - 1) / 1048576.0;
+    v.level = v.on ? 1.0f - float(quietest) / 1023.0f : 0.0f;
+    return v;
+}
 
 void Ym2612::write(int port, int addr_or_data, uint8_t v) {
     port &= 1;
@@ -340,15 +355,13 @@ void Ym2612::generate(int samples, std::vector<int16_t>& out) {
             if (c == 5 && dac_en_) acc = dac_;
             acc = std::clamp(acc, -8192, 8191);
             int32_t v = acc >> 5;  // 9-bit DAC
-            // The discrete YM2612 of the Model 1 has a step in its DAC at the
-            // zero crossing (the "ladder effect"), which gives quiet notes
-            // their harder edge. Same size as PicoDrive's YM2612 mode.
-            if (acc < 0) v -= kLadderStep;
+            const float g = audio::ease_gain(gain_now[c], gain[c]);
+            if (g != 1.0f) v = int32_t(float(v) * g);
             if (ch.left) left += v;
             if (ch.right) right += v;
         }
-        out.push_back(int16_t(std::clamp(left * 28, -32768, 32767)));
-        out.push_back(int16_t(std::clamp(right * 28, -32768, 32767)));
+        out.push_back(int16_t(std::clamp(left * 12, -32768, 32767)));
+        out.push_back(int16_t(std::clamp(right * 12, -32768, 32767)));
     }
 }
 

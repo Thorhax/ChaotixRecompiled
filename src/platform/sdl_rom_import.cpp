@@ -1,5 +1,7 @@
 #include "platform/sdl_setup.h"
 #include "frontend/setup.h"
+#include "runtime/log.h"
+#include <SDL3/SDL.h>
 #include <filesystem>
 #include <memory>
 
@@ -22,7 +24,9 @@ bool install_rom_from_stream(SDL_IOStream* source, const std::string& store_root
     const fs::path staging = setup::installed_rom_path(store_root) + ".import";
     std::error_code ec;
     fs::create_directories(staging.parent_path(), ec);
-    if (ec) return fail("cannot create ROM import directory: " + ec.message());
+    if (ec) {
+        return fail("cannot create the folder " + staging.parent_path().string() + ": " + ec.message());
+    }
     struct Cleanup {
         fs::path path;
         ~Cleanup() { std::error_code ignored; fs::remove(path, ignored); }
@@ -37,7 +41,6 @@ bool install_rom_from_stream(SDL_IOStream* source, const std::string& store_root
     size_t total = 0;
     for (;;) {
         const size_t n = SDL_ReadIO(input.get(), buffer, sizeof buffer);
-#if !defined(CHAOTIX_USE_SDL2) && !defined(__SWITCH__)
         const SDL_IOStatus status = SDL_GetIOStatus(input.get());
         if (status == SDL_IO_STATUS_ERROR || status == SDL_IO_STATUS_NOT_READY)
             return fail(std::string("cannot read ROM: ") + SDL_GetError());
@@ -45,9 +48,6 @@ bool install_rom_from_stream(SDL_IOStream* source, const std::string& store_root
             if (status != SDL_IO_STATUS_EOF) return fail("cannot read ROM: incomplete stream");
             break;
         }
-#else
-        if (!n) break;
-#endif
         if (n > max_size - total) return fail("unexpected ROM size");
         if (SDL_WriteIO(output.get(), buffer, n) != n)
             return fail(std::string("cannot write ROM import: ") + SDL_GetError());
@@ -65,11 +65,28 @@ bool install_rom_file(const std::string& source, const std::string& store_root,
                       std::string* installed_path, std::string* error) {
     std::string detail;
     if (install_rom_from_stream(SDL_IOFromFile(source.c_str(), "rb"), store_root,
-                                installed_path, &detail)) return true;
+                                installed_path, &detail)) {
+        // The installer's own log line names the staging copy it checked.
+        LOGI("setup", "the installed ROM came from %s", source.c_str());
+        return true;
+    }
+    // A verdict about the ROM's content names the staging copy ("File: ..."
+    // for a wrong image, "Cannot read ROM: ..." for one too small to be a
+    // ROM); show the user's file there instead. Any other mention of the
+    // staging path is a failure to write into the user data folder, and must
+    // keep naming that folder rather than blame the user's ROM.
     const std::string staging = setup::installed_rom_path(store_root) + ".import";
-    const auto pos = detail.find(staging);
-    if (pos != std::string::npos) detail.replace(pos, staging.size(), source);
-    else detail = "File: " + source + "\n" + detail;
+    bool names_source = false;
+    for (const std::string label : {"File: ", "Cannot read ROM: "}) {
+        const auto position = detail.find(label + staging);
+        if (position != std::string::npos) {
+            detail.replace(position, label.size() + staging.size(), label + source);
+            names_source = true;
+        }
+    }
+    if (!names_source) {
+        detail = "File: " + source + "\n" + detail;
+    }
     if (error) *error = detail;
     return false;
 }

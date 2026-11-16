@@ -4,12 +4,17 @@
 // Output encoding per pixel (alpha byte):
 //   0xFE: 32X pixel is visible regardless of the MD pixel
 //   0xFD: 32X pixel is visible only where the MD pixel is the backdrop
-//   0x00: no 32X pixel (blank mode, or a transparent frame buffer pixel)
+//   0x00: no 32X pixel (blank/disabled display or unsupported margin)
 //
-// Frame buffer value 0 is transparent in every mode (32X hardware manual):
-// the Mega Drive image shows through, whatever palette entry 0 holds.
+// Zero is an ordinary displayed pixel: pal[0] in indexed modes, black in
+// direct colour. Zero-byte suppression applies only to overwrite-image writes.
 #include "runtime/system.h"
+#include "runtime/character_mods.h"
 #include "runtime/patches.h"
+#include "runtime/same_bytes.h"
+#include "runtime/sprite_record.h"
+
+#include <cstring>
 
 namespace chaotix {
 
@@ -23,21 +28,51 @@ inline uint32_t encode(uint16_t c, bool pri) {
     bool through = (c & 0x8000) != 0;
     return ((through != pri) ? 0xFE000000u : 0xFD000000u) | rgb555(c);
 }
-// Packed pixel / run length: palette index 0 is transparent.
-inline uint32_t encode_idx(uint8_t idx, const uint16_t* pal, bool pri) {
-    return idx ? encode(pal[idx], pri) : 0;
-}
 } // namespace
 
-void Machine::render_line32x(int ln, uint32_t* all, int extra, bool wide_src) {
+void Machine::render_line32x(int ln, uint32_t* all, int extra, bool wide_src, const uint8_t* md_top,
+                             const uint32_t* md_rgb, int repeat) {
+    const int n = kNativeWidth + 2 * extra;
+    // With md_top, each pixel goes out merged with the Mega Drive's as
+    // render_output_line merges them, instead of encoded.
+    auto merge = [md_top, md_rgb](int i, uint32_t e) {
+        const uint32_t a = e >> 24, t = md_top[i];
+        return a == 0xFE || (a == 0xFD && (t & 0x40)) ? (e | 0xFF000000u) : md_rgb[t & 0x3F];
+    };
+    auto put = [&](int i, uint32_t e) { all[i] = md_top ? merge(i, e) : e; };
     // Widescreen margins show no 32X pixels (the MD layer shows through)
     // unless the scene draws into the frame buffer around each line.
-    for (int x = 0; x < kNativeWidth + 2 * extra; ++x) all[x] = 0;
+    auto blank = [&](int i0, int i1) {
+        if (md_top) for (int i = i0; i < i1; ++i) all[i] = md_rgb[md_top[i] & 0x3F];
+        else for (int i = i0; i < i1; ++i) all[i] = 0;
+    };
     uint32_t* out = all + extra;
     const int mode = mars.bitmap_mode & 3;
-    if (mode == 0 || !(mars.adapter_ctrl & 1)) return;
+    if (mode == 0 || !(mars.adapter_ctrl & 1)) {
+        blank(0, n);
+        return;
+    }
+    if (mode != 1 || !wide_src) {
+        blank(0, extra);
+        blank(extra + kNativeWidth, n);
+    }
     const bool pri = (mars.bitmap_mode & 0x80) != 0;
     const uint8_t* fb = mars.fb[mars.fb_display];
+    const uint8_t* shadow = fb_margin[mars.fb_display];
+    // Replacement graphics (runtime/sprite_replace.h): the same picture
+    // composed again with them, shown in place of the emulated buffer and
+    // its margins. Only what is shown; the machine keeps its own buffers.
+    if (sprites) sprites->shown(*this, fb, shadow);
+    // Character mods' colours (runtime/character_mods.h): a copy of the
+    // palette with their entries substituted, likewise only for the picture.
+    const uint16_t* pal = characters ? characters->display(mars.pal, sdram + CharacterPalettes::kOffsetBytes) : mars.pal;
+    // The palette's 256 entries encoded once, again only when it changed.
+    if (enc32x_pri != int(pri) || !same_bytes(enc32x_pal, pal, sizeof enc32x_pal)) {
+        for (int i = 0; i < 256; ++i) enc32x[i] = encode(pal[i], pri);
+        std::memcpy(enc32x_pal, pal, sizeof enc32x_pal);
+        enc32x_pri = int(pri);
+    }
+    const uint32_t* enc = enc32x;
     // Widescreen rows above/below the active area are not in the line table;
     // the level frame buffer is a uniform grid, so extrapolate from the edge.
     const int lt = ln < 0 ? 0 : (ln >= kActiveLines ? kActiveLines - 1 : ln);
@@ -46,21 +81,29 @@ void Machine::render_line32x(int ln, uint32_t* all, int extra, bool wide_src) {
     uint32_t base = (lineaddr * 2) & 0x1FFFF;
     switch (mode) {
     case 1: {  // packed pixel, 8 bpp
-        const uint32_t p = base + (mars.screen_shift & 1);
-        if (wide_src && rom.version == RomVersion::ChaotixJUE) {
+        uint32_t p = base + (mars.screen_shift & 1);
+        if (wide_src) {
             // Margins come from the host-side shadow (see Machine::fb_margin).
-            const uint8_t* sh = fb_margin[mars.fb_display];
-            for (int x = -extra; x < 0; ++x) all[x + extra] = encode_idx(sh[(p + uint32_t(x)) & 0x1FFFF], mars.pal, pri);
-            for (int x = kNativeWidth; x < kNativeWidth + extra; ++x) all[x + extra] = encode_idx(sh[(p + uint32_t(x)) & 0x1FFFF], mars.pal, pri);
+            const uint8_t* sh = shadow;
+            for (int x = -extra; x < 0; ++x) put(x + extra, enc[sh[(p + uint32_t(x)) & 0x1FFFF]]);
+            for (int x = kNativeWidth; x < kNativeWidth + extra; ++x) put(x + extra, enc[sh[(p + uint32_t(x)) & 0x1FFFF]]);
         }
-        for (int x = 0; x < kNativeWidth; ++x) out[x] = encode_idx(fb[(p + uint32_t(x)) & 0x1FFFF], mars.pal, pri);
+        // Extended rows are entirely redirected to the shadow by the blitter.
+        const uint8_t* center = wide_src && (ln < 0 || ln >= kActiveLines) ? shadow : fb;
+        if (p + kNativeWidth <= 0x20000) {
+            const uint8_t* src = center + p;  // the line does not wrap
+            if (md_top) for (int x = 0; x < kNativeWidth; ++x) out[x] = merge(extra + x, enc[src[x]]);
+            else for (int x = 0; x < kNativeWidth; ++x) out[x] = enc[src[x]];
+        } else {
+            for (int x = 0; x < kNativeWidth; ++x) put(extra + x, enc[center[(p + uint32_t(x)) & 0x1FFFF]]);
+        }
         break;
     }
     case 2: {  // direct colour, 15 bpp
         for (int x = 0; x < kNativeWidth; ++x) {
             uint32_t o = (base + uint32_t(x) * 2) & 0x1FFFF;
             uint16_t v = uint16_t((fb[o] << 8) | fb[o + 1]);
-            out[x] = v ? encode(v, pri) : 0;  // 0000h is transparent
+            put(extra + x, encode(v, pri));
         }
         break;
     }
@@ -71,11 +114,35 @@ void Machine::render_line32x(int ln, uint32_t* all, int extra, bool wide_src) {
             uint32_t len = fb[o & 0x1FFFF] + 1u;
             uint8_t idx = fb[(o + 1) & 0x1FFFF];
             o += 2;
-            uint32_t px = encode_idx(idx, mars.pal, pri);
-            for (uint32_t i = 0; i < len && x < kNativeWidth; ++i) out[x++] = px;
+            uint32_t px = enc[idx];
+            for (uint32_t i = 0; i < len && x < kNativeWidth; ++i, ++x) put(extra + x, px);
         }
         break;
     }
+    }
+    // A backdrop tiled every `repeat` pixels across the picture goes on into
+    // the margins. Each margin pixel is the one its place in the tile has in
+    // most of the picture's tiles, so a character standing on one tile (the
+    // PLAYER SELECT column) is not carried out with it; with no majority,
+    // the nearest tile's. Done on the encoded pixels, so only unmerged.
+    if (repeat > 0 && repeat <= kNativeWidth && !wide_src && !md_top) {
+        const int tiles = kNativeWidth / repeat;
+        auto tile_pixel = [&](int phase, bool from_right) {
+            uint32_t best = 0;
+            int best_n = 0;
+            for (int k = 0; k < tiles; ++k) {
+                const int t = from_right ? tiles - 1 - k : k;
+                const uint32_t v = out[t * repeat + phase];
+                int count = 0;
+                for (int j = 0; j < tiles; ++j) count += out[j * repeat + phase] == v;
+                if (count > best_n) best = v, best_n = count;
+            }
+            return best;
+        };
+        const int r0 = kNativeWidth - tiles * repeat;  // where the last whole tile ends
+        for (int x = -extra; x < 0; ++x) all[extra + x] = tile_pixel(((x % repeat) + repeat) % repeat, false);
+        for (int x = kNativeWidth; x < kNativeWidth + extra; ++x)
+            all[extra + x] = tile_pixel(((x - r0) % repeat + repeat) % repeat, true);
     }
 }
 

@@ -1,9 +1,18 @@
 #include "config.h"
+#include "frontend/backdrop.h"
+#include "frontend/ghost.h"
+#include "frontend/speedrun.h"
+#include "runtime/lobby.h"
+#include "runtime/tether.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 namespace chaotix {
 
@@ -26,6 +35,54 @@ const char* window_mode_name(WindowMode m) {
     case WindowMode::Fullscreen: return "Fullscreen";
     }
     return "Windowed";
+}
+
+std::string parse_menu_background(const std::string& v) {
+    std::string low;
+    for (char ch : v) low += char(std::tolower(static_cast<unsigned char>(ch)));
+    if (low == "plain") return "Plain";
+    const int zone = backdrop_find_zone(v);
+    if (zone >= 0) return backdrop_specs()[size_t(zone)].zone;
+    return "Cycle";  // Cycle, the earlier Zone, or anything unknown
+}
+
+int Config::menu_backdrop_zone() const { return backdrop_find_zone(menu_background); }
+
+bool rewind_default() {
+#if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
+    return false;
+#else
+    return true;
+#endif
+}
+
+int ghost_default() { return int(ghost::default_mode()); }
+
+int menu_size_default() {
+#if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+const char* menu_size_name(int size) {
+    switch (size) {
+    case 0: return "Normal";
+    case 1: return "Large";
+    case 2: return "ExtraLarge";
+    default: return "Auto";
+    }
+}
+
+int parse_menu_size(const std::string& v) {
+    std::string low;
+    for (char ch : v)
+        if (ch != ' ' && ch != '_' && ch != '-') low += char(std::tolower(static_cast<unsigned char>(ch)));
+    if (low == "normal") return 0;
+    if (low == "large") return 1;
+    if (low == "extralarge") return 2;
+    return -1;
 }
 
 void Config::set_defaults() {
@@ -51,12 +108,6 @@ void Config::set_defaults() {
         {"a", "Keypad 1"}, {"b", "Keypad 3"}, {"c", "Keypad 0"}, {"start", "Keypad Enter"},
         {"x", "Keypad 7"}, {"y", "Keypad 9"}, {"z", "Keypad 5"}, {"mode", "Keypad +"},
     };
-#if defined(__SWITCH__)
-    viewport.aspect = AspectMode::R16_9;
-    widescreen = true;
-    window_mode = WindowMode::Fullscreen;
-    menu_button = "back";
-#endif
 }
 
 bool Config::load(const std::string& path) {
@@ -75,6 +126,7 @@ bool Config::load(const std::string& path) {
         if (section == "Game" && k == "RomPath") rom_path = v;
         else if (section == "Game" && k == "Installed") installed = parse_bool(v, installed);
         else if (section == "Game" && k == "RomSha1") rom_sha1 = v;
+        else if (section == "Game" && k == "CheckForUpdates") check_updates = parse_bool(v, check_updates);
         else if (section == "Video") {
             if (k == "AspectRatio") parse_aspect(v, viewport.aspect, viewport.custom_aspect);
             else if (k == "Scaling") parse_scale(v, viewport.scale);
@@ -85,23 +137,110 @@ bool Config::load(const std::string& path) {
                 else window_mode = WindowMode::Windowed;
             } else if (k == "WindowScale") window_scale = std::max(1, std::atoi(v.c_str()));
             else if (k == "VSync") vsync = parse_bool(v, vsync);
+            else if (k == "ShowFps") show_fps = parse_bool(v, show_fps);
             else if (k == "Widescreen") widescreen = parse_bool(v, widescreen);
-            else if (k == "HudAtEdge") hud_at_edge = parse_bool(v, hud_at_edge);
+            else if (k == "WidescreenEverywhere") wide_everywhere = parse_bool(v, wide_everywhere);
+            else if (k == "WidescreenHud") wide_hud = parse_bool(v, wide_hud);
+            else if (k == "SmoothStart") smooth_start = parse_bool(v, smooth_start);
+            else if (k == "MenuFont") menu_game_font = !(v == "Pixel" || v == "pixel");
+            else if (k == "MenuBackground") menu_background = parse_menu_background(v);
+            else if (k == "MenuSize") menu_size = parse_menu_size(v);
+        } else if (section == "Cheats") {
+            if (k == "Enabled") {
+                cheats.clear();
+                std::string key;
+                for (char ch : v + ",") {
+                    if (ch == ',' || ch == ' ') { if (!key.empty()) cheats.insert(key); key.clear(); }
+                    else key += char(std::tolower(static_cast<unsigned char>(ch)));
+                }
+            } else if (k == "Codes") cheat_codes = v;
         } else if (section == "Achievements") {
             if (k == "Enabled") achievements = parse_bool(v, achievements);
+        } else if (section == "Mods") {
+            // DumpTiles is its name from before the 32X sprites were dumped too.
+            if (k == "DumpGraphics" || k == "DumpTiles") dump_graphics = parse_bool(v, dump_graphics);
+            else if (k == "Order") mod_order.order = mod_packs::split_list(v);
+            else if (k == "Disabled") {
+                const std::vector<std::string> off = mod_packs::split_list(v);
+                mod_order.disabled = std::set<std::string>(off.begin(), off.end());
+            } else if (k == "LooseFiles") mod_order.loose = parse_bool(v, mod_order.loose);
         } else if (section == "Audio") {
             if (k == "Enabled") audio = parse_bool(v, audio);
             else if (k == "Volume") volume = std::clamp(std::atoi(v.c_str()), 0, 100);
+            else if (k == "ModMusicVolume") mod_music_volume = std::clamp(std::atoi(v.c_str()), 0, 100);
+            else if (k == "MusicVolume") music_volume = std::clamp(std::atoi(v.c_str()), 0, 100);
+            else if (k == "EffectsVolume") effects_volume = std::clamp(std::atoi(v.c_str()), 0, 100);
         } else if (section == "Input") {
             if (k == "TouchControls") touch = v == "On" ? TouchMode::On : v == "Off" ? TouchMode::Off : TouchMode::Auto;
             else if (k == "SixButtonPad") six_button = parse_bool(v, six_button);
+            else if (k == "TouchStick") touch_stick = parse_bool(v, touch_stick);
+            else if (k == "TouchLayout") touch_sonic_cd = v == "SonicCD";
+            else if (k == "TouchOpacity") touch_opacity = std::clamp(std::atoi(v.c_str()), 0, 100);
+            else if (k == "TouchPressedOpacity") touch_pressed_opacity = std::clamp(std::atoi(v.c_str()), 0, 100);
             else if (k == "Device1") device[0] = v;
             else if (k == "Device2") device[1] = v;
             else if (k == "MenuButton") menu_button = v;
+            else if (k == "FastForwardKey") ff_key = v;
+            else if (k == "FastForwardButton") ff_button = v;
+            else if (k == "TouchFastForward") touch_ff = parse_bool(v, touch_ff);
+            else if (k == "SaveStateKey") state_save_key = v;
+            else if (k == "LoadStateKey") state_load_key = v;
+            else if (k == "StateSlotKey") state_slot_key = v;
+            else if (k == "RewindKey") rewind_key = v;
+            else if (k == "SaveStateButton") state_save_button = v;
+            else if (k == "LoadStateButton") state_load_button = v;
+            else if (k == "RewindButton") rewind_button = v;
+            else if (k == "TouchRewind") touch_rewind = parse_bool(v, touch_rewind);
+            else if (k == "FastForwardMode") ff_mode = (v == "Toggle" || v == "toggle") ? FastForwardMode::Toggle : FastForwardMode::Hold;
+            else if (k == "FastForwardSpeed")
+                ff_speed = (v == "2x" || v == "2X" || v == "2") ? FastForwardSpeed::X2
+                         : (v == "4x" || v == "4X" || v == "4") ? FastForwardSpeed::X4 : FastForwardSpeed::Max;
             else if (k.rfind("Key.", 0) == 0) keys[k.substr(4)] = v;
             else if (k.rfind("Key2.", 0) == 0) keys2[k.substr(5)] = v;
             else if (k.rfind("Pad2.", 0) == 0) pads2[k.substr(5)] = v;
             else if (k.rfind("Pad.", 0) == 0) pads[k.substr(4)] = v;
+        } else if (section == "Extras") {
+            if (k == "Rewind") rewind = parse_bool(v, rewind);
+            else if (k == "StateSlot") state_slot = std::clamp(std::atoi(v.c_str()), 1, kStateSlots);
+        } else if (section == "Lobby") {
+            if (k == "Shortcuts") lobby_shortcuts = parse_bool(v, lobby_shortcuts);
+            else if (k == "Partner") lobby_partner = std::clamp(std::atoi(v.c_str()), lobby::kPartnerNone, 7);
+            else if (k == "Time") lobby_time = std::clamp(std::atoi(v.c_str()), -1, 3);
+        } else if (section == "Tether") {
+            // A name from the menu (NORMAL, WEAK, ...), any case, or its number.
+            auto pick = [&](const char* const* names, int count, int was) {
+                std::string low;
+                for (char ch : v) low += char(std::tolower(static_cast<unsigned char>(ch)));
+                for (int i = 0; i < count; ++i) {
+                    std::string n = names[i];
+                    for (char& ch : n) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+                    if (low == n) return i;
+                }
+                if (!low.empty() && std::isdigit(static_cast<unsigned char>(low[0]))) {
+                    const int i = std::atoi(low.c_str());
+                    if (i >= 0 && i < count) return i;
+                }
+                return was;
+            };
+            if (k == "Strength") tether_strength = pick(tether::kStrengthNames, tether::kStrengthCount, tether_strength);
+            else if (k == "Partner") tether_partner = pick(tether::kPartnerNames, tether::kPartnerCount, tether_partner);
+        } else if (section == "MusicPlayer") {
+            if (k == "Repeat") music_repeat = std::clamp(std::atoi(v.c_str()), 0, 2);
+            else if (k == "FadeAfter") music_fade_after = std::clamp(std::atoi(v.c_str()), 0, 3600);
+        } else if (section == "Speedrun") {
+            if (k == "Timer") sr_timer = parse_bool(v, sr_timer);
+            else if (k == "Splits") sr_splits = parse_bool(v, sr_splits);
+            else if (k == "Compare") sr_compare_game = v == "Game" || v == "game" || v == "GAME";
+            else if (k == "InputDisplay") sr_input = parse_bool(v, sr_input);
+            else if (k == "TimerCorner") sr_timer_corner = speedrun::corner_name(speedrun::parse_corner(v, speedrun::Corner::TopRight));
+            else if (k == "InputCorner") sr_input_corner = speedrun::corner_name(speedrun::parse_corner(v, speedrun::Corner::BottomLeft));
+            else if (k == "Opacity") sr_opacity = std::clamp(std::atoi(v.c_str()), 10, 100);
+            else if (k == "StartKey") sr_start_key = v;
+            else if (k == "ResetKey") sr_reset_key = v;
+        } else if (section == "Netplay") {
+            if (k == "Port") netplay_port = std::clamp(std::atoi(v.c_str()), 1, 65535);
+            else if (k == "Address") netplay_address = v;
+            else if (k == "InputDelay") netplay_delay = std::clamp(std::atoi(v.c_str()), 0, 4);
         } else if (section == "TimeAttack") {
             if (k == "Place") ta_place = std::atoi(v.c_str());
             else if (k == "Level") ta_level = std::atoi(v.c_str());
@@ -109,7 +248,16 @@ bool Config::load(const std::string& path) {
             else if (k == "Player") ta_player = std::atoi(v.c_str());
             else if (k == "Combi") ta_combi = std::atoi(v.c_str());
             else if (k == "TwoPlayers") ta_two_players = parse_bool(v, ta_two_players);
+            else if (k == "Ghost") ta_ghost = int(ghost::parse_mode(v, ghost::Mode(ta_ghost)));
             else if (k.rfind("Best.", 0) == 0) ta_best[k.substr(5)] = std::atoi(v.c_str());
+        } else if (section == "LevelSelect") {
+            if (k == "Place") ls_place = std::atoi(v.c_str());
+            else if (k == "Level") ls_level = std::atoi(v.c_str());
+            else if (k == "Time") ls_time = std::atoi(v.c_str());
+            else if (k == "Player") ls_player = std::atoi(v.c_str());
+            else if (k == "Combi") ls_combi = std::atoi(v.c_str());
+            else if (k == "TwoPlayers") ls_two_players = parse_bool(v, ls_two_players);
+            else if (k == "NoPartner") ls_no_partner = parse_bool(v, ls_no_partner);
         } else if (section == "Debug") {
             if (k == "Overlay") debug_overlay = parse_bool(v, debug_overlay);
             else if (k == "UseRecompiledCode") use_recompiled = parse_bool(v, use_recompiled);
@@ -125,7 +273,9 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "# Path to your own legally obtained ROM (never distributed with this project)\n");
     std::fprintf(f, "RomPath = %s\n", rom_path.c_str());
     std::fprintf(f, "# Set by the first-run setup once the ROM has been copied into this folder.\n");
-    std::fprintf(f, "Installed = %s\nRomSha1 = %s\n\n", installed ? "true" : "false", rom_sha1.c_str());
+    std::fprintf(f, "Installed = %s\nRomSha1 = %s\n", installed ? "true" : "false", rom_sha1.c_str());
+    std::fprintf(f, "# Ask GitHub at start whether a newer release is out, and offer it on the title menu\n");
+    std::fprintf(f, "CheckForUpdates = %s\n\n", check_updates ? "true" : "false");
     std::fprintf(f, "[Video]\n");
     std::fprintf(f, "# Auto (match window) | 4:3 | 16:9 | 16:10 | 21:9 | W:H\n");
     if (viewport.aspect == AspectMode::Custom) std::fprintf(f, "AspectRatio = %.4f\n", viewport.custom_aspect);
@@ -133,32 +283,122 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "# true: levels render extra columns (or rows, for frames taller than 4:3) to fill\n");
     std::fprintf(f, "# the aspect ratio, from 1.24:1 (320x240) to 2:1 (480x224); false: original 4:3\n");
     std::fprintf(f, "Widescreen = %s\n", widescreen ? "true" : "false");
-    std::fprintf(f, "# true: in widescreen levels the HUD sits at the left edge of the wide image;\n");
-    std::fprintf(f, "# false: where the original 4:3 picture has it\n");
-    std::fprintf(f, "HudAtEdge = %s\n", hud_at_edge ? "true" : "false");
+    std::fprintf(f, "# true: in widescreen levels, the HUD keeps to the left edge of the picture\n");
+    std::fprintf(f, "WidescreenHud = %s\n", wide_hud ? "true" : "false");
+    std::fprintf(f, "# true: as a level starts, the characters glide to their start point (the picture\n");
+    std::fprintf(f, "# only); false: they jump there, as in the original\n");
+    std::fprintf(f, "SmoothStart = %s\n", smooth_start ? "true" : "false");
+    std::fprintf(f, "# The menu's font: Game (read from your ROM) | Pixel (the bundled pixel face)\n");
+    std::fprintf(f, "MenuFont = %s\n", menu_game_font ? "Game" : "Pixel");
+    std::fprintf(f, "# Behind the menu, pictures of the game's zones made from your ROM: Cycle (each in\n");
+    std::fprintf(f, "# turn) | WorldEntrance | IsolatedIsland | BotanicBase | MarinaMadness | SpeedSlider |\n");
+    std::fprintf(f, "# AmazingArena | TechnoTower (that one only) | Plain (no picture)\n");
+    std::fprintf(f, "MenuBackground = %s\n", parse_menu_background(menu_background).c_str());
+    std::fprintf(f, "# The menu's rows, letters and touch targets: Auto (Large on phones and tablets,\n");
+    std::fprintf(f, "# Normal elsewhere) | Normal | Large | ExtraLarge\n");
+    std::fprintf(f, "MenuSize = %s\n", menu_size_name(menu_size));
     std::fprintf(f, "# Integer | Fit | Stretch\nScaling = %s\n", scale_name(viewport.scale));
     std::fprintf(f, "# Nearest | Linear\nFilter = %s\n", linear_filter ? "Linear" : "Nearest");
     std::fprintf(f, "# Windowed | Borderless | Fullscreen\nWindowMode = %s\n", window_mode_name(window_mode));
-    std::fprintf(f, "WindowScale = %d\nVSync = %s\n\n", window_scale, vsync ? "true" : "false");
-    std::fprintf(f, "[Audio]\nEnabled = %s\nVolume = %d\n\n", audio ? "true" : "false", volume);
+    std::fprintf(f, "WindowScale = %d\nVSync = %s\n", window_scale, vsync ? "true" : "false");
+    std::fprintf(f, "# A small counter in the top right corner: frames shown and emulated per second,\n");
+    std::fprintf(f, "# and the emulation time per frame in ms (average and worst over the last second)\n");
+    std::fprintf(f, "ShowFps = %s\n\n", show_fps ? "true" : "false");
+    std::fprintf(f, "[Audio]\nEnabled = %s\nVolume = %d\n", audio ? "true" : "false", volume);
+    std::fprintf(f, "# Music from files in Mods/Music (e.g. 05.wav), in percent of Volume\n");
+    std::fprintf(f, "ModMusicVolume = %d\n", mod_music_volume);
+    std::fprintf(f, "# The game's music and its sound effects, in percent of Volume\n");
+    std::fprintf(f, "MusicVolume = %d\nEffectsVolume = %d\n\n", music_volume, effects_volume);
+    std::fprintf(f, "[Cheats]\n# Built-in: rings, speed (also in OPTIONS > CHEATS). Codes: Action Replay codes,\n");
+    std::fprintf(f, "# e.g. FFE009:63 + FFADFC:01. Awards and time attack records are not earned with any on.\n");
+    std::string enabled;
+    for (const auto& k : cheats) enabled += (enabled.empty() ? "" : ", ") + k;
+    std::fprintf(f, "Enabled = %s\nCodes = %s\n\n", enabled.c_str(), cheat_codes.c_str());
     std::fprintf(f, "[Achievements]\n# Local achievements from assets/achievements.ini (nothing leaves this machine)\n");
     std::fprintf(f, "Enabled = %s\n\n", achievements ? "true" : "false");
+    std::fprintf(f, "[Mods]\n# Write each graphic the game draws (Mega Drive tiles, 32X sprites) to Mods/Textures/Dump, for replacements\n");
+    std::fprintf(f, "DumpGraphics = %s\n", dump_graphics ? "true" : "false");
+    std::fprintf(f, "# Mod packs (folders in Mods with a mod.ini, docs/MOD_PACKS.md), by folder name: their order,\n");
+    std::fprintf(f, "# highest priority first, and the ones turned off (also OPTIONS > EXTRAS > MODS). LooseFiles:\n");
+    std::fprintf(f, "# whether Mods/Textures, Mods/Music, ... are used; they always come before every pack.\n");
+    std::fprintf(f, "Order = %s\n", mod_packs::join_list(mod_order.order).c_str());
+    std::fprintf(f, "Disabled = %s\n",
+                 mod_packs::join_list(std::vector<std::string>(mod_order.disabled.begin(), mod_order.disabled.end())).c_str());
+    std::fprintf(f, "LooseFiles = %s\n\n", mod_order.loose ? "true" : "false");
     std::fprintf(f, "[Input]\n# Auto | On | Off\nTouchControls = %s\n", touch == TouchMode::On ? "On" : touch == TouchMode::Off ? "Off" : "Auto");
     std::fprintf(f, "SixButtonPad = %s\n", six_button ? "true" : "false");
+    std::fprintf(f, "# The touch directions as a joystick instead of a d-pad\nTouchStick = %s\n", touch_stick ? "true" : "false");
+    std::fprintf(f, "# Classic (every button) | SonicCD (one big jump button, as in Sonic CD's mobile version)\nTouchLayout = %s\n",
+                 touch_sonic_cd ? "SonicCD" : "Classic");
+    std::fprintf(f, "# How opaque the touch controls are, percent: at rest, and held\nTouchOpacity = %d\nTouchPressedOpacity = %d\n",
+                 touch_opacity, touch_pressed_opacity);
     std::fprintf(f, "# Who drives each player: keyboard | pad1..padN | none\n");
     std::fprintf(f, "Device1 = %s\nDevice2 = %s\n", device[0].c_str(), device[1].c_str());
     std::fprintf(f, "# Gamepad button that opens this menu (the emulated pad uses every other one):\n");
     std::fprintf(f, "# leftstick | rightstick | guide | touchpad | misc1\n");
     std::fprintf(f, "MenuButton = %s\n", menu_button.c_str());
+    std::fprintf(f, "# Fast-forward: a key, a gamepad button (as MenuButton, or lefttrigger | righttrigger | none),\n");
+    std::fprintf(f, "# an on-screen button, Hold | Toggle, and 2x | 4x | Max. Never during a time attack run.\n");
+    std::fprintf(f, "FastForwardKey = %s\nFastForwardButton = %s\nTouchFastForward = %s\n", ff_key.c_str(),
+                 ff_button.c_str(), touch_ff ? "true" : "false");
+    std::fprintf(f, "FastForwardMode = %s\nFastForwardSpeed = %s\n", fast_forward_mode_name(ff_mode),
+                 fast_forward_speed_name(ff_speed));
+    std::fprintf(f, "# Save states and rewind: keys for quick save, quick load, the next slot and rewind\n");
+    std::fprintf(f, "# (held), gamepad buttons (as FastForwardButton), an on-screen rewind button. None of\n");
+    std::fprintf(f, "# them work during a time attack run or with the menu open.\n");
+    std::fprintf(f, "SaveStateKey = %s\nLoadStateKey = %s\nStateSlotKey = %s\nRewindKey = %s\n", state_save_key.c_str(),
+                 state_load_key.c_str(), state_slot_key.c_str(), rewind_key.c_str());
+    std::fprintf(f, "SaveStateButton = %s\nLoadStateButton = %s\nRewindButton = %s\nTouchRewind = %s\n",
+                 state_save_button.c_str(), state_load_button.c_str(), rewind_button.c_str(),
+                 touch_rewind ? "true" : "false");
     for (const auto& [b, k] : keys) std::fprintf(f, "Key.%s = %s\n", b.c_str(), k.c_str());
     for (const auto& [b, k] : keys2) std::fprintf(f, "Key2.%s = %s\n", b.c_str(), k.c_str());
     for (const auto& [b, k] : pads) std::fprintf(f, "Pad.%s = %s\n", b.c_str(), k.c_str());
     for (const auto& [b, k] : pads2) std::fprintf(f, "Pad2.%s = %s\n", b.c_str(), k.c_str());
+    std::fprintf(f, "\n[Extras]\n# Rewind: keep the last minute of play to step back through (the rewind key)\n");
+    std::fprintf(f, "Rewind = %s\n# The save state slot quick save and quick load use, 1-%d (States/ in this folder)\n",
+                 rewind ? "true" : "false", kStateSlots);
+    std::fprintf(f, "StateSlot = %d\n", state_slot);
+    std::fprintf(f, "\n[Lobby]\n# Story mode: choose the partner and the time of day instead of the Combi Catcher and the clock.\n");
+    std::fprintf(f, "# Partner: -1 the catcher's, else 0 Mighty 2 Knuckles 3 Charmy 4 Vector 5 Bomb 6 Heavy 7 Espio;\n");
+    std::fprintf(f, "# -2 none (the attractions played as with [Tether] Partner = Solo, whatever that says).\n");
+    std::fprintf(f, "# Time: -1 the game's own, else 0 morning 1 day 2 sunset 3 night.\n");
+    std::fprintf(f, "Shortcuts = %s\nPartner = %d\nTime = %d\n", lobby_shortcuts ? "true" : "false", lobby_partner,
+                 lobby_time);
+    std::fprintf(f, "\n[Tether]\n# The Combi Ring, in the five attractions' levels (not TIME ATTACK).\n");
+    std::fprintf(f, "# Strength: Normal, Weak or Strong (the pull halved, or half as strong again).\n");
+    std::fprintf(f, "# Partner (one player): Normal; Follow (the tether pulls only the partner, unless you hold it);\n");
+    std::fprintf(f, "# Solo (no partner; hold CALL for half a second to bring it back for the rest of that life).\n");
+    std::fprintf(f, "Strength = %s\nPartner = %s\n",
+                 tether::kStrengthNames[std::clamp(tether_strength, 0, tether::kStrengthCount - 1)],
+                 tether::kPartnerNames[std::clamp(tether_partner, 0, tether::kPartnerCount - 1)]);
+    std::fprintf(f, "\n[MusicPlayer]\n# When a track ends: 0 play it again, 1 stop, 2 the next track.\n");
+    std::fprintf(f, "# FadeAfter: seconds a track plays before it fades out when Repeat is 1 or 2 (0: never).\n");
+    std::fprintf(f, "Repeat = %d\nFadeAfter = %d\n", music_repeat, music_fade_after);
+    std::fprintf(f, "\n[Speedrun]\n# Overlays drawn over the picture (docs/SPEEDRUN.md): the run's timer, its splits\n");
+    std::fprintf(f, "# (best kept in Splits/ in this folder) and the pads' buttons. Corners: TopLeft TopRight\n");
+    std::fprintf(f, "# BottomLeft BottomRight. Compare: Real or Game (time). Keys: SDL key names.\n");
+    std::fprintf(f, "Timer = %s\nSplits = %s\nCompare = %s\nInputDisplay = %s\n", sr_timer ? "true" : "false",
+                 sr_splits ? "true" : "false", sr_compare_game ? "Game" : "Real", sr_input ? "true" : "false");
+    std::fprintf(f, "TimerCorner = %s\nInputCorner = %s\nOpacity = %d\nStartKey = %s\nResetKey = %s\n",
+                 sr_timer_corner.c_str(), sr_input_corner.c_str(), sr_opacity, sr_start_key.c_str(),
+                 sr_reset_key.c_str());
+    std::fprintf(f, "\n[Netplay]\n# Online two-player (docs/NETPLAY.md): the UDP port to host on, the address last joined\n");
+    std::fprintf(f, "# (host:port), and frames of input delay, 0-4 (more: fewer rollbacks, slower controls).\n");
+    std::fprintf(f, "Port = %d\nAddress = %s\nInputDelay = %d\n", netplay_port, netplay_address.c_str(), netplay_delay);
     std::fprintf(f, "\n[TimeAttack]\n# The last run set up in the front end. Values are the game's own.\n");
     std::fprintf(f, "Place = %d\nLevel = %d\nTime = %d\nPlayer = %d\nCombi = %d\nTwoPlayers = %s\n",
                  ta_place, ta_level, ta_time, ta_player, ta_combi, ta_two_players ? "true" : "false");
+    std::fprintf(f, "# The ghost a run races: OFF, BEST (the stage's fastest kept) or LAST (Ghosts/ in this folder)\n");
+    std::fprintf(f, "Ghost = %s\n", ghost::mode_name(ghost::Mode(ta_ghost)));
     std::fprintf(f, "# Best times, in level-clock frames at 60 Hz (Best.<place>.<level>)\n");
     for (const auto& [k, v] : ta_best) std::fprintf(f, "Best.%s = %d\n", k.c_str(), v);
+    std::fprintf(f, "\n[LevelSelect]\n# The last level started from LEVEL SELECT (no clock, no records, no saving).\n");
+    std::fprintf(f, "# Values are the game's own, as [TimeAttack]; Place 9 is the bonus stage, 10 a special stage.\n");
+    std::fprintf(f, "Place = %d\nLevel = %d\nTime = %d\nPlayer = %d\nCombi = %d\nTwoPlayers = %s\n",
+                 ls_place, ls_level, ls_time, ls_player, ls_combi, ls_two_players ? "true" : "false");
+    std::fprintf(f, "# NoPartner: play alone, as [Tether] Partner = Solo (one player, the five attractions only).\n");
+    std::fprintf(f, "NoPartner = %s\n", ls_no_partner ? "true" : "false");
     std::fprintf(f, "\n[Debug]\nOverlay = %s\nUseRecompiledCode = %s\n", debug_overlay ? "true" : "false", use_recompiled ? "true" : "false");
     std::fclose(f);
     return true;

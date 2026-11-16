@@ -1,5 +1,6 @@
 // See stage_select.h for where each address and table came from.
 #include "runtime/stage_select.h"
+#include "runtime/rom.h"
 #include "runtime/system.h"
 
 #include <cstdio>
@@ -28,9 +29,17 @@ enum : uint32_t {
     kPadOffset = 0xE05C,
     kMode = 0xDFDE,
     kSceneFlag = 0xDFE6,   // $8F72C8 sets this to -1 before starting
+    kSceneStep = 0xDFE0,
+    kRings = 0xE008,
+    kSpecialLevel = 0xE01A,
+    kSpecialPlayer = 0xE048,
+    kSaveSlot = 0xE01C,    // DATA slot the level end saves to; -1 is NO SAVE
 };
 
 constexpr uint16_t kModeLevel = 0x18;
+constexpr uint16_t kModeSpecial = 0x20;
+constexpr uint16_t kModeUnused = 0x28;
+constexpr uint16_t kModeBonus = 0x50;
 
 } // namespace
 
@@ -41,6 +50,54 @@ std::string format_time(int frames) {
     char out[32];
     std::snprintf(out, sizeof out, "%d'%02d\"%02d", cs / 6000, (cs / 100) % 60, cs % 100);
     return out;
+}
+
+std::vector<std::string> character_names(const Rom& rom) {
+    constexpr uint32_t kTable = 0x077254;  // $8F7254
+    constexpr size_t kLongest = 30;
+    std::vector<std::string> names;
+    for (int id = 0; id < kCharacterCount; ++id) {
+        std::string name;
+        bool ok = false;
+        const uint32_t at = kTable + 2 * uint32_t(id);
+        if (at + 2 <= rom.file_size) {
+            // The offset is signed and counted from the word itself.
+            const uint32_t text = uint32_t(int32_t(at) + int16_t(rom.read16(at)));
+            for (uint32_t p = text; p < rom.file_size && name.size() <= kLongest; ++p) {
+                const uint8_t ch = rom.data[p];
+                if (!ch) { ok = true; break; }
+                if (ch < 0x20 || ch > 0x7E) break;
+                name.push_back(char(ch));
+            }
+        }
+        while (!name.empty() && name.back() == ' ') name.pop_back();
+        names.push_back(ok && name.size() <= kLongest ? name : std::string(kCharacters[id]));
+    }
+    return names;
+}
+
+std::vector<std::string> place_names(const Rom& rom) {
+    constexpr uint32_t kTable = 0x07739E;  // $8F739E
+    constexpr uint32_t kStride = 0x15;
+    std::vector<std::string> names;
+    for (int id = 0; id < kPlaceCount; ++id) {
+        std::string name;
+        bool ok = false;
+        const uint32_t at = kTable + kStride * uint32_t(id);
+        for (uint32_t p = at; p < rom.file_size && p < at + kStride; ++p) {
+            const uint8_t ch = rom.data[p];
+            if (!ch) { ok = true; break; }
+            if (ch < 0x20 || ch > 0x7E) break;
+            name.push_back(char(ch));
+        }
+        while (!name.empty() && name.back() == ' ') name.pop_back();
+        names.push_back(ok && !name.empty() ? name : std::string(kPlaces[id].name));
+    }
+    return names;
+}
+
+bool is_placeholder_name(const std::string& name) {
+    return name.find_first_not_of('*') == std::string::npos;
 }
 
 bool has_level(int place, int level) {
@@ -62,6 +119,12 @@ bool valid(const Request& r) {
 }
 
 void apply(Machine& m, const Request& r) {
+    // The stage select's own set-up ($8F6FD8) makes the run NO SAVE before
+    // anything is chosen. Skipping it left the slot at the 0 the title
+    // screen has, which is DATA 1: the end of every level reached this way
+    // saved the run over DATA 1 ($890FD2), and once BACK TO TITLE kept the
+    // save that reached the disk.
+    wr16(m, kSaveSlot, 0xFFFF);
     wr16(m, kPlaceVar, r.place);
     wr16(m, kLevel, r.level);
     wr16(m, kAtTime, r.attime);
@@ -78,6 +141,20 @@ void apply(Machine& m, const Request& r) {
     // -2 (one player, both on pad 1) or +0x10 (the partner on pad 2).
     m.wram[kPlayers] = 0;
     m.wram[kPadOffset] = r.two_players ? 0x10 : 0xFE;
+    // Places 8-10 start in game modes of their own and leave the zone alone.
+    if (r.place == 8) {  // NOT USED
+        wr16(m, kSpecialLevel, 0);
+        wr16(m, kSceneStep, 0);
+        wr16(m, kMode, kModeUnused);
+        return;
+    }
+    if (r.place >= 9) {  // BONUS STAGE, SPECIAL STAGE
+        wr16(m, kSpecialPlayer, rd16(m, kPlayer));
+        if (r.place == 10) wr16(m, kSpecialLevel, rd16(m, kLevel));
+        wr16(m, kRings, 200);
+        wr16(m, kMode, r.place == 10 ? kModeSpecial : kModeBonus);
+        return;
+    }
     // The place is the zone the level engine loads.
     wr16(m, kZone, r.place);
     // One special case in the game's own code: WORLD ENTRANCE level 1 is the
@@ -89,9 +166,6 @@ void apply(Machine& m, const Request& r) {
         wr16(m, 0xE002, 0x0600);
         wr16(m, kLevel, 0);
     }
-    // Places 8-10 (NOT USED, BONUS STAGE, SPECIAL STAGE) start in their own
-    // game modes; the front end does not offer them, so only the level mode is
-    // transcribed here.
     wr16(m, kMode, kModeLevel);
 }
 

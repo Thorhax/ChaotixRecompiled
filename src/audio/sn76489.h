@@ -12,6 +12,27 @@ public:
     // output averaged over that period.
     int16_t run(int clocks);
 
+    // Host-side output level of tones 1-3 and noise (see Ym2612::gain).
+    float gain[4] = {1, 1, 1, 1};
+    // What is applied: eased towards gain once per output sample (run),
+    // audio/gain_ramp.h.
+    float gain_now[4] = {1, 1, 1, 1};
+
+    // Save states (runtime/save_state.h): every field of the chip's state, in
+    // a fixed order, through the archive `a`. Not gain, the host's.
+    template <class A> void state_io(A& a) {
+        a(tone_); a(vol_); a(noise_); a(latch_); a(counter_); a(out_); a(lfsr_); a(div_); a(last_);
+    }
+    // What a tone channel (0-2) is sounding, for display (issue #102): its
+    // frequency from the period, and its level 0 (off) .. 1 from the
+    // attenuation. Reads only.
+    double tone_hz(int ch) const { return tone_[ch] ? 3579545.0 / (32.0 * tone_[ch]) : 0; }
+    float tone_level(int ch) const { return float(15 - vol_[ch]) / 15.0f; }
+
+    // The last output sample: after the gains, so sound only (netplay leaves
+    // it out of the states it compares, savestate::output_only_ranges).
+    const int16_t* output_sample() const { return &last_; }
+
 private:
     uint16_t tone_[3] = {0, 0, 0};
     uint8_t vol_[4] = {15, 15, 15, 15};

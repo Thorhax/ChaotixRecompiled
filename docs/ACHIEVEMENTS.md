@@ -12,8 +12,8 @@ no account or network connection is involved.
 - In game: a notification appears on unlock; `F7` lists everything.
   On a gamepad the list is the left stick click (every other button is
   part of the emulated 6-button pad); on a touch screen, the unlock
-  counter in the top corner, where dragging scrolls the list. `B`, `F7`
-  or a tap closes it again.
+  counter in the top corner, where the two arrows at the bottom right
+  scroll the list. `B`, `F7` or a tap anywhere else closes it again.
 - Shipped definitions are compiled into the binary; a copy in the user data
   directory or next to the executable overrides them.
 - Off switch: `[Achievements] Enabled = false` in `Config/chaotix.ini`
@@ -43,6 +43,86 @@ when = rings > prev(rings)
 
 An achievement unlocks once and is then written to the save file immediately.
 
+### Attempts: `start` and `fail`
+
+Some awards are about a whole stretch of play ("clear a level without losing
+a ring"), which one frame's comparison cannot say. Two more condition lists,
+added for issue #3, describe an attempt:
+
+```ini
+[achievement NOT A SCRATCH]
+id = clear_no_loss
+start = clock == 0                                ; a level begins
+fail  = rings < prev(rings)                       ; a ring lost spoils it
+when  = goal == 0xFF and prev(goal) != 0xFF       ; counts at the goal
+```
+
+Each frame `fail` is looked at first, then `start`, then `when`, and `when`
+only counts while an attempt is going. A frame that both spoils and begins one
+(a new level: the count drops back to zero as the clock reads zero) begins it.
+Nothing is going until `start` has held once, and `fail` without `start` is
+refused when the file is read. Whenever the tracker loses sight of the game
+-- a save state loaded, a rewind, a session of netplay, or frames it does not
+look at because a cheat is on or the ring tether is changed -- any attempt
+going is dropped and has to start again.
+
+### Sets: `collect` and `count`
+
+Some awards are about a set of things done over many sessions ("clear a
+level as each of the five leaders"). Issue #95 added `collect`, a variable,
+and `count`:
+
+```ini
+[achievement THE WHOLE TEAM]
+id = clear_as_everyone
+when = zone <= 4 and level >= 1 and goal == 0xFF and prev(goal) != 0xFF
+collect = player
+count = 5
+```
+
+Each frame `when` holds, the variable's value (0-63) joins the set seen so
+far, and the award unlocks once `count` different values are in it. The set is
+kept in the same file as the unlocks, as `id.seen = 0x...` (bit v for value v),
+and saved whenever it grows, so it builds up across sessions. RESET AWARDS
+empties it too. `collect` and `count` go together, and `count` is 1 to 64.
+
+## Issue #95: fewer free awards
+
+A video review found that three awards came just from playing the tutorial,
+and others from simply playing on. Sixteen awards needed nothing done, and
+were taken out:
+
+- FIRST SPARKLE (the first ring)
+- the five TICKET TO ... (entering an attraction)
+- PRACTICE MAKES PERFECT and WASHED ASHORE (playing Training, the opening)
+- the seven "play as" awards
+- CLAW GAME (choosing a partner with the Combi Catcher)
+
+Six awards that take some doing came in:
+
+| award | what | points |
+| --- | --- | --- |
+| WORLD TOUR | clear a level of each of the five attractions (a set of places) | 30 |
+| THE WHOLE TEAM | clear a level as each of the five who can lead (a set of players) | 40 |
+| NOBODY LEFT BEHIND | clear a level with each of the seven as partner (a set of partners) | 30 |
+| SPEED DEMON | clear a level with under 30 seconds on the clock | 40 |
+| RING HOARDER | reach a goal carrying 100 rings or more | 30 |
+| CURTAIN CALL | beat the final battle and see the ending (WORLD ENTRANCE 4 on) | 50 |
+
+That makes 28 awards. A player who had earned a removed award no longer sees
+it listed: none of the new ones follows from having entered a place or played
+as someone, so there is nothing to carry it over to. Its line stays in the
+progress file as it was (`Tracker` writes back lines it has no award for), so
+it comes back if the award ever does.
+
+### Icons
+
+`icon` names the emblem drawn for an award in the notification and on the
+AWARDS page: `ring`, `chaos` (a Chaos Ring, its colour taken from the title),
+`goal`, `clock`, `place`, `team`, `boss`; anything else is a star. Titles are
+written in capitals with letters, digits, spaces and `! ? - , . '` only, so
+that the game's own letters (MENU_ART.md) can draw them; a unit test checks.
+
 ## Game variables
 
 Found by watching 68K work RAM while the game runs and cross-checking against
@@ -55,6 +135,44 @@ the method is described below).
 | `FFDFF2` | word | attraction id: 0 Botanic Base, 1 Speed Slider*, 2 Amazing Arena, 3 Techno Tower, 4 Marina Madness, 6 Isolated Island, 7 = not in a level |
 | `FFDFF4` | word | level number shown on the title card (1-5) |
 | `FFE008` | word | ring count; reset to 0 when a level starts |
+| `FFE010` | word | the level clock in 1/64 s, high four bits minutes (SPEEDRUN.md); 0 until the player has control and in the lobby, stopped at the goal |
+| `FFFDC5` | byte | `FF` from the frame the goal is passed (`$890882`) to the next scene |
+| `FFDFF6` | word | time of day: 0-1 morning, 2-3 day, 4-5 sunset, 6-7 night |
+| `FFE01A` | word | special stages won (`$927A16` adds one on a clear): 1-6 Chaos Rings, 7-11 clears after all six |
+| `FFDFFE`-`FFE002` | byte each | each attraction's progress (the level it is up to); 6 once its fifth level is cleared (`$890F86`) |
+| `FFFDD0` | word | the Combi Catcher's controller object while the claw runs, `FFFF` without |
+
+### What issue #3 added, and how each was seen
+
+All by running the game headless and printing the bytes as they change
+(`--peek-every`), with the ROM's code read only to find where to look:
+
+- **The goal and the clock.** `tests/recordings/finished_run.txt` clears
+  BOTANIC BASE 1: `FFFDC5` goes from `00` to `FF` at frame 3423, the frame the
+  run's clock stops, and back to `00` 23 frames into the lobby. `FFE010` reads
+  `0` until frame 1341, climbs about 64 a second, and stops at `08A8` -- 34.6 s,
+  the results screen's 0'34"66.
+- **Chaos Rings.** The goal object, when it comes on screen, puts a giant ring
+  `0x60` px above the goal if the player holds 50 rings (`$890666`). With 50
+  rings given to the run before that, and the ring moved down into its path,
+  the run goes into a special stage without leaving the level's mode `0x18`;
+  with its result set to cleared (as the results-screen tests do), `FFE01A`
+  goes `0` -> `1` at frame 5194 as the game returns to the lobby. Starting
+  from 2 or 5, the same clear makes 3 or 6.
+- **An attraction cleared.** The level end writes `level + 1` to the
+  attraction's byte at `FFDFFE + place`. The recorded run, its level made the
+  fifth after the goal, writes `06` to `FFDFFE` at frame 4639.
+- **The bonus stage** is entered from a giant ring with 20 rings or more
+  (ISSUE_38_BONUS_STAGE.md). It sets the place and level to WORLD ENTRANCE 3
+  for about 20 frames while it loads, then puts the level's back; that is
+  what is watched for, from an attraction (`prev(zone) <= 4`), since the
+  ending's first scene has the same number but follows the final battle.
+- **The final battle** is WORLD ENTRANCE level 2 (ISSUE_56_FINAL_BOSS.md).
+- **The Combi Catcher.** `FFFDD0` is `FFFF` in the lobby and holds the
+  claw's controller (`AD08`) from Down on the catcher's box until the claw
+  gives up its capsule (LOBBY_SHORTCUTS.md).
+- **Time of day** needs no new address: a level asked for at NIGHT reads 6,
+  MORNING 0, and the end of each level adds one.
 
 \* ids 0, 2, 3, 4 and 6 were confirmed by reading the title card of each
 attract demo while logging the variable; 1 is inferred from the remaining
@@ -147,6 +265,44 @@ build/chaotix_headless --rom <rom> --frames 12000 --achievements assets/achievem
 
 It prints the frame at which each achievement unlocks, so a definition that
 fires too early (or never) is obvious. `tests/test_achievements.cpp` covers
-the parser and the trigger evaluation with a fake memory image, and the
-`achievements_attract` test checks that the shipped definitions still unlock
-during the attract demos.
+the parser, the trigger evaluation and attempts with a fake memory image, and
+checks the shipped file (unique ids, the ids save files already hold, titles
+the game's letters can draw). In `tests/CMakeLists.txt`, the
+`achievements_*` tests earn the awards in the game itself: the attract demo
+earns nothing, the recorded run earns the goal awards (and loses NOT A SCRATCH
+when its rings are taken away), and the Chaos Ring, attraction, bonus stage,
+final battle and Combi Catcher tests each reach their scene. Where the
+recording does not go far enough a `--poke` gives the game the state it would
+have reached, and the comment says which; the other four attractions' awards
+are checked only against fake memory, by the same rule as Botanic Base's.
+
+## How they look
+
+Issue #3 asked for awards that look like part of the game. The notification
+is a slanted purple banner edged in black with a magenta strip, sliding in
+from the left: the award's emblem in a gold medallion over its end (a ring
+award's ring turns, the way the game's rings do), the title in the game's own
+letters, the description and the points. The AWARDS page (`F7`) is the same
+idea: a title banner, a ring-gold meter of the points, and a card for each
+award, greyed until it is earned. Two columns on a wide window, one on 4:3 or
+a phone, where the cards are taller (MENU SIZE).
+
+Earning several at once (a level that starts on the fifth level of a new
+attraction, a save loaded with Chaos Rings in it) no longer stacks a banner
+for each up the side of the screen (`src/platform/toast_queue.h`). At most
+two award banners show at a time; the next waits for a place, and while any
+wait, the ones up stay 2.5 seconds instead of 5. When two or more are still
+waiting beyond the free places they fold into one banner, "N MORE AWARDS",
+with their points added up and a star; the AWARDS page lists them. Other
+notifications (TIME ATTACK, NETPLAY, save states) answer something the
+player just did, so they never wait.
+
+![Two awards up, two more waiting](images/issue-3-award-notification.png)
+![The two that waited, folded](images/issue-3-award-folded.png)
+
+![AWARDS, 16:9](images/issue-3-awards-16-9.png)
+![AWARDS, 4:3](images/issue-3-awards-4-3.png)
+
+Everything is drawn from shapes (`src/platform/award_art.*`); no picture of
+the game's is used, and the letters are the menu's (made from the player's ROM
+when the program runs, MENU_ART.md), falling back to the pixel face.

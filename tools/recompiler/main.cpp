@@ -90,14 +90,32 @@ int main(int argc, char** argv) {
     t += "};\nconst size_t g_m68k_entry_count = sizeof(g_m68k_entries) / sizeof(g_m68k_entries[0]);\n\n";
     t += "const Sh2Entry g_sh2_entries[] = {\n";
     for (const auto& e : rs.table) {
-        std::snprintf(buf, sizeof buf, "  {0x%08Xu, %s, %u, %u},\n", e.key, e.fn.c_str(), e.range_begin, e.range_count);
+        std::snprintf(buf, sizeof buf, "  {0x%08Xu, %s, %u, %u, %u},\n", e.key, e.fn.c_str(), e.range_begin, e.range_count, e.fn_index);
         t += buf;
     }
-    t += "};\nconst size_t g_sh2_entry_count = sizeof(g_sh2_entries) / sizeof(g_sh2_entries[0]);\n\n";
+    t += "};\nconst size_t g_sh2_entry_count = sizeof(g_sh2_entries) / sizeof(g_sh2_entries[0]);\n";
+    t += "const size_t g_sh2_function_count = " + std::to_string(rs.functions) + ";\n\n";
     t += "const CodeRange g_sh2_ranges[] = {\n";
     for (const auto& r : rs.ranges) { std::snprintf(buf, sizeof buf, "  {0x%08Xu, %u, 0x%06Xu},\n", r[0], r[1], r[2]); t += buf; }
     if (rs.ranges.empty()) t += "  {0, 0, 0},\n";
-    t += "};\nconst size_t g_sh2_range_count = " + std::to_string(rs.ranges.size()) + ";\n\n} // namespace recomp\n";
+    t += "};\nconst size_t g_sh2_range_count = " + std::to_string(rs.ranges.size()) + ";\n\n";
+    // ROM bytes run or folded without run-time validation, merged, per CPU.
+    t += "const RomCode g_rom_code[] = {\n";
+    size_t rom_code_count = 0;
+    for (int cpu = 0; cpu < 2; ++cpu) {
+        auto v = cpu == 0 ? rm.rom_code : rs.rom_code;
+        std::sort(v.begin(), v.end());
+        std::vector<std::pair<uint32_t, uint32_t>> merged;
+        for (const auto& r : v) {
+            if (!merged.empty() && r.first <= merged.back().first + merged.back().second)
+                merged.back().second = std::max(merged.back().first + merged.back().second, r.first + r.second) - merged.back().first;
+            else merged.push_back(r);
+        }
+        for (const auto& r : merged) { std::snprintf(buf, sizeof buf, "  {%d, 0x%06Xu, %u},\n", cpu, r.first, r.second); t += buf; }
+        rom_code_count += merged.size();
+    }
+    if (!rom_code_count) t += "  {0, 0, 0},\n";
+    t += "};\nconst size_t g_rom_code_count = " + std::to_string(rom_code_count) + ";\n\n} // namespace recomp\n";
     write_file(out_dir + "/recomp_tables.cpp", t);
 
     // CMake source list
@@ -116,6 +134,7 @@ int main(int argc, char** argv) {
                   pm.stats.branch_tables, pm.stats.offset_tables, pm.stats.code_pointers);
     man += buf;
     man += "sh2_fast_forward_loops " + std::to_string(rs.fast_loops) + std::string(1, 10);
+    man += "m68k_fast_forward_loops " + std::to_string(rm.fast_loops) + std::string(1, 10);
     write_file(out_dir + "/manifest.txt", man);
     std::printf("%s", man.c_str());
     for (const auto& w : ps.warnings) std::printf("warning (sh2): %s\n", w.c_str());

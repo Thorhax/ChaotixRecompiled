@@ -1,6 +1,11 @@
 #include "platform/sdl_setup.h"
 
+#include <SDL3/SDL.h>
+
 #include "frontend/setup.h"
+#ifdef SDL_PLATFORM_IOS
+#include "platform/ios_document_picker.h"
+#endif
 #include "platform/ui.h"
 #include "renderer/image_io.h"
 #include "runtime/log.h"
@@ -8,6 +13,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
+#include <mutex>
 #include <vector>
 
 namespace chaotix {
@@ -20,22 +27,34 @@ struct Hit {
 };
 enum : int { kActionBrowse = -2, kActionInstall = -3, kActionRescan = -4 };
 
+// What the file dialog hands back. SDL may call file_chosen on another
+// thread, and after the setup screen has gone -- it can finish while the
+// dialog is still open, from a gamepad, Enter or a dropped file -- so the
+// screen and the callback share this, under its lock, until both are done
+// with it (issue #123).
+struct DialogResult {
+    std::mutex lock;
+    bool open = false;
+    std::string picked;
+};
+
 struct SetupState {
     std::vector<setup::Candidate> candidates;
     std::vector<Hit> hits;   // touch targets from the last frame
     int selected = 0;
     int visible = 0;         // rows the last layout had room for
     std::string status;
-    std::string picked;      // filled in by the file dialog callback
-    bool dialog_open = false;
+    std::shared_ptr<DialogResult> dialog = std::make_shared<DialogResult>();
     bool rescan = true;
 };
 
-#if !defined(CHAOTIX_USE_SDL2) && !defined(__SWITCH__)
+#ifndef SDL_PLATFORM_IOS
+// userdata: a std::shared_ptr<DialogResult> of its own, made for this call.
 void SDLCALL file_chosen(void* userdata, const char* const* files, int) {
-    auto* st = static_cast<SetupState*>(userdata);
-    st->dialog_open = false;
-    if (files && files[0]) st->picked = files[0];
+    std::unique_ptr<std::shared_ptr<DialogResult>> result(static_cast<std::shared_ptr<DialogResult>*>(userdata));
+    std::lock_guard<std::mutex> hold((*result)->lock);
+    (*result)->open = false;
+    if (files && files[0]) (*result)->picked = files[0];
 }
 #endif
 
@@ -104,9 +123,15 @@ void draw(ui::Ui& g, const std::string& store_root, SetupState& st) {
         g.panel(box, ui::theme::surface, ui::theme::outline, g.px(10));
         g.text_fit(ui::Font::Body, x + g.px(14), y + g.px(10), column - g.px(28),
                    "No ROM found in the usual folders", ui::theme::warn);
+#ifdef SDL_PLATFORM_IOS
+        // Nothing can be dropped onto an iPhone app; the Files app can put
+        // the ROM into the app's folder, which is searched (Rescan).
+        const char* hint = "Copy it to this app's folder with the Files app, or use Browse.";
+#else
+        const char* hint = "Drop a file onto this window, or use Browse below.";
+#endif
         g.text_fit(ui::Font::Small, x + g.px(14), y + g.px(10) + g.line_height(ui::Font::Body),
-                   column - g.px(28), "Drop a file onto this window, or use Browse below.",
-                   ui::theme::text_dim);
+                   column - g.px(28), hint, ui::theme::text_dim);
         y += box.h + card_gap;
     } else {
         // Keep the highlighted row on screen when the list is longer than the
@@ -179,9 +204,6 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
         LOGE("setup", "cannot initialise the setup screen (no font)");
         return "";
     }
-#if !defined(CHAOTIX_USE_SDL2) && !defined(__SWITCH__)
-    const SDL_DialogFileFilter filters[] = {{"32X ROM", "32x;bin;md;gen;rom"}, {"All files", "*"}};
-#endif
 
     auto report_error = [&](const std::string& detail) {
         LOGW("setup", "%s", detail.c_str());
@@ -199,10 +221,25 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
         return installed;
     };
     auto browse = [&]() {
-#if !defined(CHAOTIX_USE_SDL2) && !defined(__SWITCH__)
-        if (st.dialog_open) return;
-        st.dialog_open = true;
-        SDL_ShowOpenFileDialog(file_chosen, &st, window, filters, 2, nullptr, false);
+        {
+            std::lock_guard<std::mutex> hold(st.dialog->lock);
+            if (st.dialog->open) return;
+#ifndef SDL_PLATFORM_IOS
+            st.dialog->open = true;
+#endif
+        }
+#ifdef SDL_PLATFORM_IOS
+        // SDL has no file dialog on iOS: the system's picker, which returns
+        // once a file is chosen.
+        const char* documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+        std::string picked = ios_pick_document(window, documents ? documents : "");
+        std::lock_guard<std::mutex> hold(st.dialog->lock);
+        st.dialog->picked = std::move(picked);
+#else
+        static const SDL_DialogFileFilter filters[] = {{"32X ROM", "32x;bin;md;gen;rom"}, {"All files", "*"}};
+        // Not under the lock: SDL may call file_chosen before this returns.
+        SDL_ShowOpenFileDialog(file_chosen, new std::shared_ptr<DialogResult>(st.dialog), window, filters, 2,
+                               nullptr, false);
 #endif
     };
 
@@ -219,24 +256,13 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
             case SDL_EVENT_QUIT:
                 return "";
             case SDL_EVENT_DROP_FILE: {
-#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
-                if (!e.drop.file) break;
-                std::string installed = install(e.drop.file);
-                SDL_free(e.drop.file);
-#else
                 if (!e.drop.data) break;
                 std::string installed = install(e.drop.data);
-#endif
                 if (!installed.empty()) return installed;
                 break;
             }
-            case SDL_EVENT_KEY_DOWN: {
-#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
-                const SDL_Keycode key = e.key.keysym.sym;
-#else
-                const SDL_Keycode key = e.key.key;
-#endif
-                switch (key) {
+            case SDL_EVENT_KEY_DOWN:
+                switch (e.key.key) {
                 case SDLK_ESCAPE:
                     return "";
                 case SDLK_UP:
@@ -262,7 +288,6 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
                     break;
                 }
                 break;
-            }
             case SDL_EVENT_FINGER_DOWN:
             case SDL_EVENT_MOUSE_BUTTON_DOWN: {
                 float px = 0, py = 0;
@@ -270,8 +295,8 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
                     px = e.tfinger.x * g.width();
                     py = e.tfinger.y * g.height();
                 } else {
-                    px = float(e.button.x);
-                    py = float(e.button.y);
+                    px = e.button.x;
+                    py = e.button.y;
                 }
                 for (const Hit& hit : st.hits) {
                     if (px < hit.r.x || px > hit.r.x + hit.r.w) continue;
@@ -293,40 +318,32 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
                 break;
             }
             case SDL_EVENT_GAMEPAD_ADDED:
-#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
-                SDL_GameControllerOpen(e.cdevice.which);
-#else
                 SDL_OpenGamepad(e.gdevice.which);
-#endif
                 break;
-            case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
-#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
-                const Uint8 btn = e.cbutton.button;
-#else
-                const Uint8 btn = e.gbutton.button;
-#endif
-                if (btn == SDL_GAMEPAD_BUTTON_DPAD_UP && st.selected > 0) --st.selected;
-                if (btn == SDL_GAMEPAD_BUTTON_DPAD_DOWN && st.selected + 1 < int(st.candidates.size())) ++st.selected;
-                if (btn == SDL_GAMEPAD_BUTTON_SOUTH && !st.candidates.empty()) {
+            case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+                if (e.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP && st.selected > 0) --st.selected;
+                if (e.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN && st.selected + 1 < int(st.candidates.size())) ++st.selected;
+                if (e.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH && !st.candidates.empty()) {
                     std::string installed = install(st.candidates[size_t(st.selected)].path);
                     if (!installed.empty()) return installed;
                 }
                 break;
-            }
             default:
                 break;
             }
         }
 
-        if (!st.picked.empty()) {
-            std::string path = st.picked;
-            st.picked.clear();
+        std::string path;
+        {
+            std::lock_guard<std::mutex> hold(st.dialog->lock);
+            path.swap(st.dialog->picked);
+        }
+        if (!path.empty()) {
             std::string installed = install(path);
             if (!installed.empty()) return installed;
         }
 
         draw(g, store_root, st);
-#if !defined(CHAOTIX_USE_SDL2) && !defined(__SWITCH__)
         // Test hook: capture the page (before presenting, while the target
         // still holds it) and leave, so the setup screen can be checked
         // without a human at the keyboard.
@@ -340,7 +357,6 @@ std::string run_setup_screen(SDL_Window* window, SDL_Renderer* renderer,
             }
             return "";
         }
-#endif
         SDL_RenderPresent(renderer);
         SDL_Delay(16);
     }

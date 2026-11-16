@@ -21,6 +21,7 @@ struct TableEntry {
     uint32_t key;         // 68K: pc | (bank+1)<<24 ; SH-2: pc
     std::string fn;
     uint32_t range_begin = 0, range_count = 0;
+    uint32_t fn_index = 0;  // SH-2: the function's number (Sh2Entry::fn_index)
 };
 
 struct EmitResult {
@@ -28,6 +29,10 @@ struct EmitResult {
     std::vector<std::string> decls;          // function declarations
     std::vector<TableEntry> table;
     std::vector<std::array<uint32_t, 3>> ranges;  // SH-2 validation ranges
+    // ROM bytes the generated code was made from without validating them at
+    // run time: code run straight from ROM, and SH-2 literals folded from it
+    // (ROM offset, length). A ROM patch over them needs the interpreter.
+    std::vector<std::pair<uint32_t, uint32_t>> rom_code;
     size_t functions = 0, instructions = 0, folded_literals = 0, fast_loops = 0;
 };
 

@@ -3,6 +3,7 @@
 #include "cpu/sh2/sh2_interp.h"
 #include "runtime/log.h"
 #include <algorithm>
+#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -15,6 +16,8 @@
 
 namespace recomp {
 int g_depth = 0;
+bool g_idle_skip = true;
+uint64_t g_idle_skipped[3] = {};
 }
 
 namespace chaotix {
@@ -34,30 +37,8 @@ std::unordered_map<uint64_t, uint64_t> g_fallback;
 Machine* g_m = nullptr;
 bool g_installed = false;
 
-#if CHAOTIX_HAVE_GENERATED
-
-std::unordered_map<uint32_t, recomp::M68kFn> g_m68k_map;
-
-struct Sh2FnState {
-    recomp::Sh2Fn fn = nullptr;
-    uint32_t range_begin = 0, range_count = 0;
-    uint32_t sdram_epoch[2] = {0, 0}, cache_epoch[2] = {0, 0};
-    bool valid[2] = {false, false};
-};
-std::vector<Sh2FnState> g_sh2_fns;
-std::unordered_map<uint32_t, uint32_t> g_sh2_map;  // pc -> index in g_sh2_fns
-
-inline recomp::M68kFn lookup_m68k(const m68k::State* c) {
-    // The 68000 PC is 32 bits wide; generated code is keyed by the exact
-    // 24-bit address, so PCs with upper bits set (e.g. 0xFFFFxxxx RAM stubs
-    // reached through sign-extended absolute-short jumps) are interpreted.
-    if (c->pc >> 24) return nullptr;
-    uint32_t key = c->pc;
-    if (key >= 0x900000 && key < 0xA00000) key |= uint32_t((g_m->mars.bank & 3) + 1) << 24;
-    auto it = g_m68k_map.find(key);
-    return it == g_m68k_map.end() ? nullptr : it->second;
-}
-
+// Outside the generated-code block: the interpreter reads SH-2 code through
+// it too, so an interpreter-only build needs it as well.
 const uint8_t* sh2_host_ptr(int cpu, uint32_t addr) {
     uint32_t area = addr >> 29;
     if (area <= 1) {
@@ -69,29 +50,117 @@ const uint8_t* sh2_host_ptr(int cpu, uint32_t addr) {
     return nullptr;
 }
 
+#if CHAOTIX_HAVE_GENERATED
+
+// The block entry points, looked up on every dispatch. Open addressing in a
+// power-of-two table with a multiplicative hash: std::unordered_map reduces
+// its hash modulo a prime bucket count, a division per lookup, and 32-bit ARM
+// (armeabi-v7a) has no divide instruction, so that is a library call each
+// time (issue #54). Lookups find exactly what the map found.
+template <class V>
+class EntryTable {
+public:
+    void clear() {
+        keys_.clear();
+        vals_.clear();
+        shift_ = 32;
+        count_ = 0;
+    }
+    // Inserts or overwrites, as map[key] = v.
+    void set(uint32_t key, V v) {
+        if (key == kEmpty) return;  // not an address code can start at (odd)
+        if ((count_ + 1) * 2 > keys_.size()) grow();
+        uint32_t i = slot(key);
+        const uint32_t mask = uint32_t(keys_.size() - 1);
+        while (keys_[i] != kEmpty && keys_[i] != key) i = (i + 1) & mask;
+        if (keys_[i] == kEmpty) ++count_;
+        keys_[i] = key;
+        vals_[i] = v;
+    }
+    const V* find(uint32_t key) const {
+        if (keys_.empty() || key == kEmpty) return nullptr;
+        const uint32_t mask = uint32_t(keys_.size() - 1);
+        for (uint32_t i = slot(key);; i = (i + 1) & mask) {
+            if (keys_[i] == key) return &vals_[i];
+            if (keys_[i] == kEmpty) return nullptr;
+        }
+    }
+
+private:
+    static constexpr uint32_t kEmpty = 0xFFFFFFFFu;
+    uint32_t slot(uint32_t key) const { return shift_ >= 32 ? 0 : (key * 0x9E3779B1u) >> shift_; }
+    void grow() {
+        std::vector<uint32_t> keys = std::move(keys_);
+        std::vector<V> vals = std::move(vals_);
+        const size_t cap = keys.empty() ? 64 : keys.size() * 2;
+        keys_.assign(cap, kEmpty);
+        vals_.assign(cap, V{});
+        shift_ = 32;
+        for (size_t c = cap; c > 1; c >>= 1) --shift_;
+        count_ = 0;
+        for (size_t i = 0; i < keys.size(); ++i)
+            if (keys[i] != kEmpty) set(keys[i], vals[i]);
+    }
+    std::vector<uint32_t> keys_;
+    std::vector<V> vals_;
+    int shift_ = 32;
+    size_t count_ = 0;
+};
+
+EntryTable<recomp::M68kFn> g_m68k_map;
+
+struct Sh2FnState {
+    recomp::Sh2Fn fn = nullptr;
+    uint32_t index = 0;  // its number (Sh2Entry::fn_index)
+    uint32_t range_begin = 0, range_count = 0;
+    // What the last check per CPU was made at: the machine's code epochs and
+    // the count of writes over this function's code.
+    uint32_t sdram_epoch[2] = {0, 0}, writes[2] = {0, 0}, cache_epoch[2] = {0, 0};
+    bool valid[2] = {false, false};
+};
+std::vector<Sh2FnState> g_sh2_fns;
+EntryTable<uint32_t> g_sh2_map;  // pc -> index in g_sh2_fns
+
+inline recomp::M68kFn lookup_m68k(const m68k::State* c) {
+    // The 68000 PC is 32 bits wide; generated code is keyed by the exact
+    // 24-bit address, so PCs with upper bits set (e.g. 0xFFFFxxxx RAM stubs
+    // reached through sign-extended absolute-short jumps) are interpreted.
+    if (c->pc >> 24) return nullptr;
+    uint32_t key = c->pc;
+    if (key >= 0x900000 && key < 0xA00000) key |= uint32_t((g_m->mars.bank & 3) + 1) << 24;
+    const recomp::M68kFn* fn = g_m68k_map.find(key);
+    return fn ? *fn : nullptr;
+}
+
+
 bool sh2_validate(Sh2FnState& s, int cpu) {
     if (s.range_count == 0) return true;
-    uint32_t se = g_m->sdram_code_epoch, ce = g_m->cache_code_epoch[cpu];
-    if (s.sdram_epoch[cpu] == se && s.cache_epoch[cpu] == ce) return s.valid[cpu];
+    const uint32_t se = g_m->sdram_code_epoch, ce = g_m->cache_code_epoch[cpu];
+    const uint32_t w = s.index < g_m->sh2_fn_code_writes.size() ? g_m->sh2_fn_code_writes[s.index] : 0;
+    if (s.sdram_epoch[cpu] == se && s.writes[cpu] == w && s.cache_epoch[cpu] == ce) return s.valid[cpu];
     ++g_stats.sh2_validations;
     bool ok = true;
     for (uint32_t i = 0; i < s.range_count && ok; ++i) {
         const recomp::CodeRange& r = recomp::g_sh2_ranges[s.range_begin + i];
         const uint8_t* host = sh2_host_ptr(cpu, r.addr);
         if (!host) continue;
-        if (r.rom_off + r.len > g_m->rom.data.size() || std::memcmp(host, g_m->rom.data.data() + r.rom_off, r.len) != 0) ok = false;
+        // Against the ROM the code was made from, not a patched one (issue #35):
+        // code a patch changed then runs in the interpreter.
+        const std::vector<uint8_t>& rom = g_m->rom.unpatched();
+        if (r.rom_off + r.len > rom.size() || std::memcmp(host, rom.data() + r.rom_off, r.len) != 0) ok = false;
     }
     if (!ok) ++g_stats.sh2_invalid;
     s.valid[cpu] = ok;
     s.sdram_epoch[cpu] = se;
+    s.writes[cpu] = w;
     s.cache_epoch[cpu] = ce;
     return ok;
 }
 
 inline Sh2FnState* lookup_sh2(const sh2::State* c) {
-    auto it = g_sh2_map.find(c->pc);
-    if (it == g_sh2_map.end()) return nullptr;
-    Sh2FnState& s = g_sh2_fns[it->second];
+    const uint32_t* index = g_sh2_map.find(c->pc);
+    if (!index) return nullptr;
+    Sh2FnState& s = g_sh2_fns[*index];
     return sh2_validate(s, c->id) ? &s : nullptr;
 }
 
@@ -172,6 +241,39 @@ int m68k_call_dynamic(m68k::State* c) {
 #endif
 }
 
+uint8_t sh2_code_byte(const sh2::State* c, uint32_t addr) {
+    const uint8_t* p = chaotix::sh2_host_ptr(c->id, addr);
+    return p ? *p : 0;
+}
+
+uint16_t sh2_code16(const sh2::State* c, uint32_t addr) {
+    const uint8_t* p = chaotix::sh2_host_ptr(c->id, addr);
+    return p ? uint16_t(p[0] << 8 | p[1]) : 0;
+}
+
+uint32_t sh2_code32(const sh2::State* c, uint32_t addr) {
+    const uint8_t* p = chaotix::sh2_host_ptr(c->id, addr);
+    return p ? uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3] : 0;
+}
+
+bool sh2_callee_valid(const sh2::State* c, uint32_t* cache) {
+#if CHAOTIX_HAVE_GENERATED
+    if (!*cache) {
+        const uint32_t* index = chaotix::g_sh2_map.find(c->pc);
+        if (!index) return false;
+        *cache = *index + 1;
+    }
+    return chaotix::sh2_validate(chaotix::g_sh2_fns[*cache - 1], c->id);
+#else
+    (void)c; (void)cache;
+    return false;
+#endif
+}
+
+int32_t sh2_read_stable_to(const sh2::State* c, uint32_t a, int size, int32_t at) {
+    return chaotix::g_m->sh2_read_stable_to(c->id, a, size, at);
+}
+
 int sh2_call_dynamic(sh2::State* c) {
 #if CHAOTIX_HAVE_GENERATED
     chaotix::Sh2FnState* s = chaotix::lookup_sh2(c);
@@ -190,10 +292,26 @@ int sh2_call_dynamic(sh2::State* c) {
 
 namespace chaotix {
 
+#if CHAOTIX_HAVE_GENERATED
+// Each function's validation ranges in SDRAM, for the counts of writes over
+// its code (Machine::set_sdram_code_owners).
+static void set_code_owners(Machine& m) {
+    std::vector<Machine::CodeOwner> owners;
+    for (const Sh2FnState& s : g_sh2_fns)
+        for (uint32_t i = 0; i < s.range_count; ++i) {
+            const recomp::CodeRange& r = recomp::g_sh2_ranges[s.range_begin + i];
+            if ((r.addr >> 29) <= 1 && ((r.addr & 0x1FFFFFFF) >> 24) == 0x06)
+                owners.push_back({r.addr & 0x3FFFF, (r.addr & 0x3FFFF) + r.len, s.index});
+        }
+    m.set_sdram_code_owners(owners, g_sh2_fns.size());
+}
+#endif
+
 RecompStatus install_recompiled_code(Machine& m, bool enable) {
     RecompStatus st;
     g_m = &m;
     g_stats = DispatchStats{};
+    for (uint64_t& n : recomp::g_idle_skipped) n = 0;
     g_fallback.clear();
 #if CHAOTIX_HAVE_GENERATED
     if (!enable) {
@@ -206,45 +324,75 @@ RecompStatus install_recompiled_code(Machine& m, bool enable) {
         return st;
     }
     g_m68k_map.clear();
-    for (size_t i = 0; i < recomp::g_m68k_entry_count; ++i) g_m68k_map[recomp::g_m68k_entries[i].key] = recomp::g_m68k_entries[i].fn;
-    g_sh2_fns.clear();
+    for (size_t i = 0; i < recomp::g_m68k_entry_count; ++i) g_m68k_map.set(recomp::g_m68k_entries[i].key, recomp::g_m68k_entries[i].fn);
+    // Functions by number (Sh2Entry::fn_index), which their generated code
+    // also uses for its count of writes over its code.
+    g_sh2_fns.assign(recomp::g_sh2_function_count, Sh2FnState{});
     g_sh2_map.clear();
-    std::map<recomp::Sh2Fn, uint32_t> index;
-    m.sdram_code_ranges.clear();
-    m.cache_code_ranges.clear();
     for (size_t i = 0; i < recomp::g_sh2_entry_count; ++i) {
         const recomp::Sh2Entry& e = recomp::g_sh2_entries[i];
-        auto it = index.find(e.fn);
-        if (it == index.end()) {
-            Sh2FnState s;
-            s.fn = e.fn;
-            s.range_begin = e.range_begin;
-            s.range_count = e.range_count;
-            it = index.emplace(e.fn, uint32_t(g_sh2_fns.size())).first;
-            g_sh2_fns.push_back(s);
-        }
-        g_sh2_map[e.pc] = it->second;
+        if (e.fn_index >= g_sh2_fns.size()) continue;
+        Sh2FnState& s = g_sh2_fns[e.fn_index];
+        s.fn = e.fn;
+        s.index = e.fn_index;
+        s.range_begin = e.range_begin;
+        s.range_count = e.range_count;
+        g_sh2_map.set(e.pc, e.fn_index);
     }
+    m.sdram_code_ranges.clear();
+    m.cache_code_ranges.clear();
     for (size_t i = 0; i < recomp::g_sh2_range_count; ++i) {
         const recomp::CodeRange& r = recomp::g_sh2_ranges[i];
         uint32_t area = r.addr >> 29;
         if (area <= 1 && ((r.addr & 0x1FFFFFFF) >> 24) == 0x06) m.sdram_code_ranges.push_back({r.addr & 0x3FFFF, (r.addr & 0x3FFFF) + r.len});
         else if (area == 6) m.cache_code_ranges.push_back({r.addr & 0xFFF, (r.addr & 0xFFF) + r.len});
     }
+    m.code_ranges_changed();
+    set_code_owners(m);
     m.remap_sh2();
-    m.exec.m68k_block = m68k_exec;
-    m.exec.sh2_block = sh2_exec;
+    // A ROM patch over code that runs straight from ROM (or literals folded
+    // from it) would be ignored by the generated code: that CPU interprets.
+    bool patched_code[2] = {false, false};
+    for (const auto& [off, len] : m.rom.patched)
+        for (size_t i = 0; i < recomp::g_rom_code_count; ++i) {
+            const recomp::RomCode& rc = recomp::g_rom_code[i];
+            if (rc.len && off < rc.rom_off + rc.len && rc.rom_off < off + len) patched_code[rc.cpu & 1] = true;
+        }
+    if (!patched_code[0]) m.exec.m68k_block = m68k_exec;
+    if (!patched_code[1]) m.exec.sh2_block = sh2_exec;
     st.active = true;
     g_installed = true;
-    char buf[256];
-    std::snprintf(buf, sizeof buf, "static recompilation (%zu 68K entry points, %zu SH-2 entry points, %zu SH-2 functions); interpreter fallback for uncovered code",
-                  recomp::g_m68k_entry_count, recomp::g_sh2_entry_count, g_sh2_fns.size());
+    char buf[320];
+    std::snprintf(buf, sizeof buf, "static recompilation (%zu 68K entry points, %zu SH-2 entry points, %zu SH-2 functions); interpreter fallback for uncovered code%s%s",
+                  recomp::g_m68k_entry_count, recomp::g_sh2_entry_count, g_sh2_fns.size(),
+                  patched_code[0] ? "; 68K interpreted (a ROM patch changes its code)" : "",
+                  patched_code[1] ? "; SH-2 interpreted (a ROM patch changes its code)" : "");
     st.description = buf;
 #else
     (void)enable;
     st.description = "reference interpreters (no generated code in this build)";
 #endif
     return st;
+}
+
+Machine* bind_recompiled_code(Machine& m) {
+    Machine* before = g_m;
+    g_m = &m;
+#if CHAOTIX_HAVE_GENERATED
+    // Generated code reads the machine's counts of writes over its code.
+    if (m.sh2_fn_code_writes.size() != g_sh2_fns.size()) {
+        set_code_owners(m);
+        m.remap_sh2();
+    }
+    // A machine's code epochs start at 1, so 0 matches none: every function
+    // is checked again against this machine's memory before it next runs.
+    for (Sh2FnState& s : g_sh2_fns) {
+        s.sdram_epoch[0] = s.sdram_epoch[1] = 0;
+        s.cache_epoch[0] = s.cache_epoch[1] = 0;
+        s.valid[0] = s.valid[1] = false;
+    }
+#endif
+    return before;
 }
 
 DispatchSnapshot dispatch_snapshot() {
@@ -257,6 +405,8 @@ DispatchSnapshot dispatch_snapshot() {
     return s;
 }
 
+void set_idle_skip(bool on) { recomp::g_idle_skip = on; }
+
 void print_recomp_stats(const Machine& m) {
     std::printf("cycles: 68K %llu, MSH2 %llu, SSH2 %llu\n", (unsigned long long)m.stats.m68k_cycles,
                 (unsigned long long)m.stats.msh2_cycles, (unsigned long long)m.stats.ssh2_cycles);
@@ -266,6 +416,13 @@ void print_recomp_stats(const Machine& m) {
                 pct(g_stats.m68k_native, g_stats.m68k_interp), pct(g_stats.sh2_native[0], g_stats.sh2_interp[0]),
                 pct(g_stats.sh2_native[1], g_stats.sh2_interp[1]), (unsigned long long)g_stats.sh2_validations,
                 (unsigned long long)g_stats.sh2_invalid);
+    if (g_installed) {
+        const uint64_t* sk = recomp::g_idle_skipped;
+        auto share = [](uint64_t a, uint64_t b) { return b ? 100.0 * double(a) / double(b) : 0.0; };
+        std::printf("wait loops fast-forwarded: 68K %.1f%%, MSH2 %.1f%%, SSH2 %.1f%% of cycles%s\n",
+                    share(sk[0], m.stats.m68k_cycles), share(sk[1], m.stats.msh2_cycles), share(sk[2], m.stats.ssh2_cycles),
+                    recomp::g_idle_skip ? "" : " (off)");
+    }
     if (!g_fallback.empty()) {
         std::vector<std::pair<uint64_t, uint64_t>> v(g_fallback.begin(), g_fallback.end());
         std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.second > b.second; });

@@ -1,4 +1,5 @@
 #include "sn76489.h"
+#include "audio/gain_ramp.h"
 
 namespace chaotix {
 
@@ -27,33 +28,36 @@ void Sn76489::write(uint8_t v) {
 }
 
 int16_t Sn76489::run(int clocks) {
+    float g[4];
+    for (int c = 0; c < 4; ++c) g[c] = audio::ease_gain(gain_now[c], gain[c]);
     int32_t acc = 0;
     int n = 0;
     // The PSG divides its input clock by 16 before the tone counters.
     div_ += clocks;
     while (div_ >= 16) {
         div_ -= 16;
-        // The Sega PSG treats a period of 0 as 1 (the TI part counts it as
-        // 0x400). Chaotix drives its noise from tone 2 set to 0, so this
-        // decides between a hiss and a rumble.
         for (int c = 0; c < 3; ++c) {
             if (--counter_[c] <= 0) {
-                counter_[c] = tone_[c] ? tone_[c] : 1;
+                counter_[c] = tone_[c] ? tone_[c] : 0x400;
                 out_[c] ^= 1;
             }
         }
         if (--counter_[3] <= 0) {
             int rate = noise_ & 3;
-            counter_[3] = rate == 3 ? (tone_[2] ? tone_[2] : 1) * 2 : (0x10 << rate) * 2;
+            counter_[3] = rate == 3 ? (tone_[2] ? tone_[2] : 0x400) * 2 : (0x10 << rate) * 2;
             uint16_t fb = (noise_ & 4) ? uint16_t(((lfsr_ & 1) ^ ((lfsr_ >> 3) & 1))) : uint16_t(lfsr_ & 1);
             lfsr_ = uint16_t((lfsr_ >> 1) | (fb << 15));
             out_[3] = lfsr_ & 1;
         }
         int32_t s = 0;
-        for (int c = 0; c < 3; ++c) s += out_[c] ? kVolume[vol_[c]] : -kVolume[vol_[c]];
-        // Noise swings as far as a tone does: on the chip every channel
-        // switches between 0 and its volume.
-        s += out_[3] ? kVolume[vol_[3]] : -kVolume[vol_[3]];
+        for (int c = 0; c < 3; ++c) {
+            const int32_t v = out_[c] ? kVolume[vol_[c]] : -kVolume[vol_[c]];
+            s += g[c] == 1.0f ? v : int32_t(float(v) * g[c]);
+        }
+        // Swinging both ways like the tones, so noise and a tone at the same
+        // volume are as loud as each other (as in PicoDrive: docs/AUDIO_MIX.md).
+        const int32_t noise = out_[3] ? kVolume[vol_[3]] : -kVolume[vol_[3]];
+        s += g[3] == 1.0f ? noise : int32_t(float(noise) * g[3]);
         acc += s;
         ++n;
     }

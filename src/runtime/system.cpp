@@ -2,7 +2,10 @@
 #include "log.h"
 #include "cpu/m68k/m68k_interp.h"
 #include "runtime/patches.h"
+#include "runtime/divide.h"
+#include "audio/gain_ramp.h"
 #include "cpu/sh2/sh2_interp.h"
+#include "runtime/sprite_record.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -41,16 +44,15 @@ void z80_out(void*, uint16_t, uint8_t) {}
 } // namespace
 
 Machine::Machine() {
-    // reset() sets these up for a run; a machine that is only inspected (the
-    // tests) must not start with whatever the heap held before.
-    std::memset(wram, 0, sizeof wram);
-    std::memset(sdram, 0, sizeof sdram);
-    std::memset(zram, 0, sizeof zram);
-    std::memset(fb_margin, 0, sizeof fb_margin);
     std::memset(sram, 0xFF, sizeof sram);
     exec.m68k_block = m68k::interp_block;
     exec.sh2_block = sh2::interp_block;
     std::memset(framebuffer, 0, sizeof framebuffer);
+    // reset() clears these too, but tooling and tests read a Machine that was
+    // never reset; heap memory reused from an earlier Machine is not zero.
+    std::memset(wram, 0, sizeof wram);
+    std::memset(sdram, 0, sizeof sdram);
+    std::memset(zram, 0, sizeof zram);
 }
 
 Machine::~Machine() = default;
@@ -70,19 +72,11 @@ void Machine::load_rom(Rom&& r) {
         LOGI("rom", "%s (sha1 %s)", rom_version_name(rom.version), rom.sha1.c_str());
 }
 
-void Machine::rebind() {
-    vdp.host.user = this;
-    z80.bus.user = this;
-    m68k.irq_user = this;
-    if (m68k.hook) m68k.hook_user = this;
-    remap_m68k();
-    remap_sh2();
-}
-
 void Machine::reset() {
     std::memset(wram, 0, sizeof wram);
     std::memset(sdram, 0, sizeof sdram);
     std::memset(zram, 0, sizeof zram);
+    std::memset(fb_margin, 0, sizeof fb_margin);
     // The 32X boot ROMs are not used (boot is high-level emulated). The SH-2
     // BIOS area reads as an infinite loop in case anything jumps there.
     for (size_t i = 0; i < sizeof bios_stub; i += 4) {
@@ -230,18 +224,11 @@ void Machine::boot_hle_start_sh2() {
 // ---------------------------------------------------------------------------
 // Scheduler
 // ---------------------------------------------------------------------------
-void Machine::z80_catch_up(uint64_t mclk) {
-    const uint64_t target = mclk / 15;
-    if (target <= z80_clock) return;
-    if (!z80_reset && !z80_busreq) z80::run(&z80, int32_t(target - z80_clock));
-    z80_clock = target;
-}
-
 void Machine::run_slice(uint64_t end_mclk) {
     // 68000
     {
         ProfScope ps(profile, &stats.prof_ns[PROF_M68K]);
-        uint64_t target = end_mclk / 7;
+        uint64_t target = div_const<7>(end_mclk);
         if (target > m68k_clock) {
             int32_t budget = int32_t(target - m68k_clock);
             m68k.cycles = budget;
@@ -258,22 +245,23 @@ void Machine::run_slice(uint64_t end_mclk) {
             stats.m68k_cycles += done;
         }
     }
-    // Z80 (sound CPU), unless held in reset or its bus is taken by the 68K
+    // Z80 (sound CPU), unless held in reset or its bus is taken by the 68K.
+    // The 68K's writes to BUSREQ and RESET in this slice already ran it up
+    // to their time (z80_sync).
     {
         ProfScope ps(profile, &stats.prof_ns[PROF_Z80]);
-        z80_catch_up(end_mclk);
+        z80_sync(end_mclk);
     }
     // SH-2 master then slave (only after the 68K releases them from reset)
-    const uint64_t sh_target = end_mclk * 3 / 7;
+    const uint64_t sh_target = div_const<7>(end_mclk * 3);
     for (int c = 0; c < 2; ++c) {
         if (!boot_hle_done || !(mars.adapter_ctrl & 2)) { sh2_clock[c] = sh_target; continue; }
         if (sh_target <= sh2_clock[c]) continue;
         ProfScope ps(profile, &stats.prof_ns[c ? PROF_SSH2 : PROF_MSH2]);
         sh2::State& s = sh2[c];
         int32_t budget = int32_t(sh_target - sh2_clock[c]);
-        int32_t eff_budget = (sh2_speed_multiplier <= 100) ? budget : int32_t(int64_t(budget) * sh2_speed_multiplier / 100);
-        s.cycles = eff_budget;
-        sh2_slice_[c] = SliceInfo{true, sh2_clock[c], eff_budget};
+        s.cycles = budget;
+        sh2_slice_[c] = SliceInfo{true, sh2_clock[c], budget};
         while (s.cycles > 0) {
             sh2::check_irq(&s);
             if (s.sleeping) { s.cycles = 0; break; }
@@ -281,59 +269,75 @@ void Machine::run_slice(uint64_t end_mclk) {
             exec.sh2_block(&s);
         }
         sh2_slice_[c].running = false;
-        if (sh2_speed_multiplier <= 100) {
-            // Stock speed: the clock advances by what actually ran, so a
-            // block that overshoots the slice is paid back in the next one.
-            const uint64_t done = uint64_t(int64_t(budget) - s.cycles);
-            sh2_clock[c] += done;
-            (c ? stats.ssh2_cycles : stats.msh2_cycles) += done;
-            onchip_advance(c, uint32_t(done));
-        } else {
-            // Overclocked: the extra cycles are free, emulated time is not.
-            sh2_clock[c] = sh_target;
-            (c ? stats.ssh2_cycles : stats.msh2_cycles) += budget;
-            onchip_advance(c, uint32_t(budget));
-        }
+        uint64_t done = uint64_t(int64_t(budget) - s.cycles);
+        sh2_clock[c] += done;
+        (c ? stats.ssh2_cycles : stats.msh2_cycles) += done;
+        onchip_advance(c, uint32_t(done));
     }
     uint64_t start = mclk;
     mclk = end_mclk;
     ProfScope ps(profile, &stats.prof_ns[PROF_AUDIO]);
-    if (boot_hle_done) pwm_advance(uint32_t((end_mclk * 3 / 7) - (start * 3 / 7)));
+    if (boot_hle_done) pwm_advance(uint32_t(sh_target - div_const<7>(start * 3)));
     audio_advance(end_mclk);
 }
 
+void Machine::z80_sync(uint64_t now_mclk) {
+    const uint64_t target = now_mclk / 15;
+    if (target <= z80_clock) return;
+    const int32_t budget = int32_t(target - z80_clock);
+    // Advanced first: a Z80 write through its bank window that reaches
+    // BUSREQ or RESET syncs again, and must find nothing left to run.
+    z80_clock = target;
+    if (!z80_reset && !z80_busreq) z80::run(&z80, budget);
+}
+
+void Machine::z80_catch_up() {
+    // Up to the 68K's time, but not past this line: the 68K may have run
+    // ahead of its slice, and the Z80's interrupt line changes at line starts.
+    z80_sync(std::min<uint64_t>(m68k_now_mclk(), line_start_mclk + kMclkPerLine));
+}
+
+void Machine::set_z80_busreq(bool requested) {
+    z80_catch_up();
+    z80_busreq = requested ? 1 : 0;
+}
+
 void Machine::audio_advance(uint64_t end_mclk) {
-    const uint64_t target = end_mclk / kMclkPerAudioSample;
+    const uint64_t target = div_const<kMclkPerAudioSample>(end_mclk);
     if (target <= audio_pos) return;
     const int n = int(target - audio_pos);
     audio_pos = target;
     if (!audio_enabled) { ym.tick_timers(n); return; }
     size_t base = audio_out.size();
     ym.generate(n, audio_out);
-    // Mix levels are PicoDrive's, including its final 7/8: one FM channel
-    // peaks at 7/8 of 14 bits, a full-width PWM pulse at 7/8 of 16 bits, and
-    // a PSG channel swings 7/8 of PicoDrive's 0x1200.
+    // The three sources are mixed at PicoDrive's levels (docs/AUDIO_MIX.md):
+    // an FM channel reaches +-8191, a PSG tone +-2304, and PWM the full
+    // +-32768; the sum is then taken down by 1/8 before it is clipped.
     // PWM: 12-bit pulse widths centred on cycle/2; LMD/RMD route the FIFOs.
+    // A width past the cycle is a pulse that never ends: full scale.
     auto pwm_level = [&](int sel) -> int32_t {
         if (pwm.cycle <= 1) return 0;
         int32_t v = sel == 1 ? pwm.out_l : sel == 2 ? pwm.out_r : int32_t(pwm.cycle / 2);
-        return (v - int32_t(pwm.cycle / 2)) * 57344 / int32_t(pwm.cycle);
+        v = std::min(v, int32_t(pwm.cycle));
+        return (v - int32_t(pwm.cycle / 2)) * 65536 / int32_t(pwm.cycle);
     };
     // Confirmed stereo routes: 0x05 keeps L/R independent; 0x0a swaps them.
     // Preserve other modes pending hardware verification: reference emulators
     // disagree on the single-source routing (see docs/AUDIO_PWM.md).
     const int route = pwm.ctrl & 0x0f;
     const int right_source = route == 0x05 ? 2 : route == 0x0a ? 1 : (pwm.ctrl >> 2) & 3;
-    const int32_t pl = pwm_level(pwm.ctrl & 3), pr = pwm_level(right_source);
+    const int32_t pwm_in[2] = {pwm_level(pwm.ctrl & 3), pwm_level(right_source)};
     for (int i = 0; i < n; ++i) {
         psg_frac += kMclkPerAudioSample;
         int clocks = psg_frac / 15;
         psg_frac -= clocks * 15;
-        int32_t p = psg.run(clocks) * 63 / 128;  // +-4095 per channel -> +-2016
-        const int32_t in[2] = {audio_out[base + size_t(i) * 2] + p + pl, audio_out[base + size_t(i) * 2 + 1] + p + pr};
+        // Ym2612::generate gives a channel +-3072 (its 9-bit DAC x 12) and
+        // Sn76489::run a tone +-4096: scaled here to the levels above.
+        int32_t p = psg.run(clocks) * 9 / 16;
+        const float pg = audio::ease_gain(pwm_gain_now, pwm_gain);
         for (int ch = 0; ch < 2; ++ch) {
             // One-pole DC blocker (~17 Hz corner at 53 kHz).
-            float x = float(in[ch]);
+            float x = (float(audio_out[base + size_t(i) * 2 + size_t(ch)] * 8 / 3 + p) + float(pwm_in[ch]) * pg) * 0.875f;
             float y = x - dc_x[ch] + 0.998f * dc_y[ch];
             dc_x[ch] = x;
             dc_y[ch] = y;
@@ -348,7 +352,10 @@ void Machine::start_line() {
     z80.irq_line = line == kActiveLines ? 1 : 0;  // Z80 /INT for one line at V-blank
     if (line == kActiveLines) {
         // V-blank start: 32X frame buffer swap and V interrupt.
-        if (mars.fb_display != mars.fb_select_req) mars.fb_display = mars.fb_select_req;
+        if (mars.fb_display != mars.fb_select_req) {
+            mars.fb_display = mars.fb_select_req;
+            if (sprites) sprites->flipped(*this);
+        }
         for (int c = 0; c < 2; ++c) mars.irq_pending[c] |= 0x08;
     }
     // 32X H interrupt every (HCOUNT + 1) lines.
@@ -371,69 +378,108 @@ void Machine::render_output_line(int src_line, int dst_row) {
     const int n = vdp.width() + 2 * extra;
     uint32_t md[Vdp::kMaxWidth];
     uint8_t bg[Vdp::kMaxWidth];
-    vdp.render_line(src_line, md, bg, extra);
+    // The bonus stage, the results screen and the final boss use the whole
+    // screen.
+    const patches::PolyScene scene = patches::PolyScene(poly_scene);
+    // The way into the stage is framed like the stage (issue #91).
+    const bool stage = special_entry || (wide_special && scene != patches::PolyScene::Bonus &&
+                                         scene != patches::PolyScene::Results && scene != patches::PolyScene::Boss);
+    vdp.hidden_frame_tile = stage ? patches::kSpecialFrameTile : 0xFFFF;
+    vdp.radial_lut = radial_lut;
+    vdp.radial_len = radial_len;
+    vdp.radial_cx2 = kNativeWidth;
+    vdp.radial_cy2 = kActiveLines;
+    vdp.alt_cram = wide_active && lobby_alt ? lobby_cram : nullptr;
+    vdp.alt_x0 = lobby_alt_x0;
+    vdp.alt_x1 = lobby_alt_x1;
+    vdp.shown_extra = wide_active ? extra : 0;
+    vdp.shown_extra_bottom =
+        wide_active && !wide_special ? std::clamp(wide_extra_bottom, 0, patches::kMaxWideExtraBottom) : 0;
+    uint8_t top[Vdp::kMaxWidth];
+    const bool indexed = vdp.render_line_indexed(src_line, top, md, bg, extra);
+    const uint32_t* cram_rgb = vdp.palette_rgb();
     uint32_t* row = framebuffer + dst_row * kScreenWidth;
-    render_line32x(src_line, row, extra, wide_active);
     // Merge: render_line32x marks 32X pixels that should be shown with
     // alpha 0xFE; 0xFD means "only where the MD pixel is the backdrop".
-    // Scenes without widescreen support get black side bars. In a level, the
-    // margin columns outside the level's camera range are blacked out too,
-    // except for 32X pixels when the HUD has moved into the margin.
-    patches::MarginCut cut{0, 0};
-    if (extra) cut = wide_active ? patches::margin_cut(*this, extra) : patches::MarginCut{extra, extra};
-    const bool keep32x = wide_active && wide_hud_edge;
-    for (int x = 0; x < n; ++x) {
+    // With the Mega Drive line as CRAM indices (bit 6 for the backdrop) as
+    // wide as the 32X's, render_line32x merges each pixel as it goes.
+    // DATA LOAD, TRAINING, PLAY STYLE and PLAYER SELECT (issue #135): the 32X
+    // backdrop is tiled, so it goes on into the margins.
+    if (src_line == 0) menu_tiled = extra && wide_enabled && patches::menu_margins(*this) && patches::menu_backdrop_tiled(*this);
+    const bool menu = menu_tiled && extra && !wide_active && !wide_special && !stage;
+    const bool merged = indexed && debug_layer == 0 && n == kNativeWidth + 2 * extra && !menu;
+    render_line32x(src_line, row, extra, wide_active, merged ? top : nullptr, cram_rgb,
+                   menu ? patches::kMenuTile : 0);
+    if (menu) {
+        // Their Mega Drive planes are 512 px wide, and a banner running off
+        // one side of the screen comes round again on the other. In the
+        // margins the planes are shown only where they carry on from the
+        // screen's edge without a gap on the line (the banner going on past
+        // the edge); anything else there is the backdrop.
+        const uint8_t bd = uint8_t(vdp.reg[7] & 0x3F);
+        auto shows = [&](int x) { return indexed ? !(top[x] & 0x40) : bg[x] == 0; };
+        auto clear = [&](int x) {
+            if (indexed) top[x] = uint8_t(0x40 | bd);
+            else {
+                bg[x] = 1;
+                md[x] = Vdp::cram_to_rgb(vdp.cram[bd]);
+            }
+        };
+        bool on = shows(extra);
+        for (int x = extra - 1; x >= 0; --x) {
+            on = on && shows(x);
+            if (!on) clear(x);
+        }
+        on = shows(extra + kNativeWidth - 1);
+        for (int x = extra + kNativeWidth; x < n; ++x) {
+            on = on && shows(x);
+            if (!on) clear(x);
+        }
+    }
+    if (merged) {
+        // Done.
+    } else if (indexed && debug_layer == 0) {
+        for (int x = 0; x < n; ++x) {
+            const uint32_t p = row[x], a = p >> 24, t = top[x];
+            const bool show32x = a == 0xFE || (a == 0xFD && (t & 0x40));
+            row[x] = show32x ? (p | 0xFF000000u) : cram_rgb[t & 0x3F];
+        }
+    } else if (debug_layer == 0) {
+        for (int x = 0; x < n; ++x) {
+            const uint32_t p = row[x], a = p >> 24;
+            const bool show32x = a == 0xFE || (a == 0xFD && bg[x] != 0);
+            row[x] = show32x ? (p | 0xFF000000u) : md[x];
+        }
+    } else for (int x = 0; x < n; ++x) {
+        if (indexed) {
+            md[x] = cram_rgb[top[x] & 0x3F];
+            bg[x] = uint8_t(top[x] >> 6);
+        }
         uint32_t p = row[x];
         bool show32x = (p >> 24) == 0xFE;
         bool mdbg = bg[x] != 0;
-        if (x < cut.left || x >= n - cut.right) row[x] = keep32x && show32x ? 0xFF000000u | (p & 0xFFFFFF) : 0xFF000000u;
-        else if (show32x || ((p >> 24) == 0xFD && mdbg)) row[x] = 0xFF000000u | (p & 0xFFFFFF);
+        if (show32x || ((p >> 24) == 0xFD && mdbg)) row[x] = 0xFF000000u | (p & 0xFFFFFF);
         else row[x] = md[x];
+        // Debugging: one layer alone, the other shown as magenta.
+        if (debug_layer == 1) row[x] = md[x];
+        else if (debug_layer == 2 && !(show32x || ((p >> 24) == 0xFD && mdbg))) row[x] = 0xFFFF00FFu;
     }
     if (extra) {
-
-        if (wide_active && rom.version != RomVersion::ChaotixJUE) {
-            if (edge_blend_mode == EdgeBlendMode::SoftFeather && extra >= 16) {
-                constexpr int kFeather = 16;
-                for (int i = 0; i < kFeather; ++i) {
-                    int xl = extra + i;
-                    uint32_t c32_l = row[xl], cmd_l = md[xl];
-                    float tl = float(i + 1) / float(kFeather);
-                    uint8_t rl = uint8_t((1.0f - tl) * ((cmd_l >> 16) & 0xFF) + tl * ((c32_l >> 16) & 0xFF));
-                    uint8_t gl = uint8_t((1.0f - tl) * ((cmd_l >> 8) & 0xFF) + tl * ((c32_l >> 8) & 0xFF));
-                    uint8_t bl = uint8_t((1.0f - tl) * (cmd_l & 0xFF) + tl * (c32_l & 0xFF));
-                    row[xl] = 0xFF000000u | (rl << 16) | (gl << 8) | bl;
-
-                    int xr = extra + 320 - 1 - i;
-                    uint32_t c32_r = row[xr], cmd_r = md[xr];
-                    float tr = float(i + 1) / float(kFeather);
-                    uint8_t rr = uint8_t((1.0f - tr) * ((cmd_r >> 16) & 0xFF) + tr * ((c32_r >> 16) & 0xFF));
-                    uint8_t gr = uint8_t((1.0f - tr) * ((cmd_r >> 8) & 0xFF) + tr * ((c32_r >> 8) & 0xFF));
-                    uint8_t br = uint8_t((1.0f - tr) * (cmd_r & 0xFF) + tr * (c32_r & 0xFF));
-                    row[xr] = 0xFF000000u | (rr << 16) | (gr << 8) | br;
-                }
-            } else if (edge_blend_mode == EdgeBlendMode::Vignette) {
-                for (int x = 0; x < extra; ++x) {
-                    float f = float(x) / float(extra);
-                    uint32_t c = row[x];
-                    uint8_t r = uint8_t(((c >> 16) & 0xFF) * f);
-                    uint8_t g = uint8_t(((c >> 8) & 0xFF) * f);
-                    uint8_t b = uint8_t((c & 0xFF) * f);
-                    row[x] = 0xFF000000u | (r << 16) | (g << 8) | b;
-                }
-                for (int x = n - extra; x < n; ++x) {
-                    float f = float(n - 1 - x) / float(extra);
-                    uint32_t c = row[x];
-                    uint8_t r = uint8_t(((c >> 16) & 0xFF) * f);
-                    uint8_t g = uint8_t(((c >> 8) & 0xFF) * f);
-                    uint8_t b = uint8_t((c & 0xFF) * f);
-                    row[x] = 0xFF000000u | (r << 16) | (g << 8) | b;
-                }
-            } else if (edge_blend_mode == EdgeBlendMode::DarkPillars) {
-                for (int x = 0; x < extra; ++x) row[x] = 0xFF000000u;
-                for (int x = n - extra; x < n; ++x) row[x] = 0xFF000000u;
-            }
-        }
+        // Scenes without widescreen support: black side bars. In a level,
+        // black out margin columns outside the level's camera range. The
+        // title shows its horizon in them (patches::title_margins).
+        patches::MarginCut cut{extra, extra};
+        // The special stage's frame: black above and below its rectangle.
+        if (wide_special && !stage) cut = patches::MarginCut{};
+        else if (stage) cut = src_line < patches::kSpecialRect[2] || src_line > patches::kSpecialRect[3]
+                                    ? patches::MarginCut{extra, extra} : patches::MarginCut{};
+        else if (wide_active) cut = patches::margin_cut(*this, extra);
+        // The title's horizon (issue #77): the game draws it wider than the
+        // screen, so its margins are shown as they are.
+        else if (wide_enabled && patches::title_margins(*this)) cut = patches::MarginCut{};
+        else if (menu) cut = patches::MarginCut{};
+        for (int x = 0; x < cut.left; ++x) row[x] = 0xFF000000u;
+        for (int x = 0; x < cut.right; ++x) row[n - 1 - x] = 0xFF000000u;
     }
 }
 
@@ -447,14 +493,33 @@ void Machine::end_line() {
     const int eb = std::clamp(wide_extra_bottom, 0, patches::kMaxWideExtraBottom);
     const int n = vdp.width() + 2 * std::clamp(wide_extra, 0, patches::kMaxWideExtra);
     for (int k = 0; k < eb; ++k) {
-        if (wide_active) { render_output_line(kActiveLines + k, kActiveLines + k); continue; }
+        if (wide_active && !wide_special) { render_output_line(kActiveLines + k, kActiveLines + k); continue; }
         uint32_t* row = framebuffer + (kActiveLines + k) * kScreenWidth;
         for (int x = 0; x < n; ++x) row[x] = 0xFF000000u;
     }
 }
 
+namespace {
+void machine_sh2_hook(sh2::State* c, uint32_t pc) {
+    Machine* m = static_cast<Machine*>(c->hook_user);
+    patches::sh2_hook(*m, *c, pc);
+    if (m->sprites) sprite_sh2_hook(c, pc);
+}
+} // namespace
+
 void Machine::run_frame() {
     patches::begin_frame(*this);
+    // The sprite recorder's hooks, on the master SH-2 (the only one that
+    // draws). Set every frame: a copy of a machine shares the recorder but
+    // must report its own state.
+    // The widened bonus stage moves its items' X there too (patches.h,
+    // kBonusItemReturn), before the recorder sees them.
+    sh2::State& ms = sh2[0];
+    const bool bonus = wide_special && patches::PolyScene(poly_scene) == patches::PolyScene::Bonus;
+    ms.hook = bonus ? machine_sh2_hook : sprites ? sprite_sh2_hook : nullptr;
+    ms.hook_user = this;
+    ms.hook_pcs = patches::kSh2Hooks;
+    ms.hook_count = patches::kSh2HookCount;
     for (line = 0; line < kLinesPerFrameNTSC; ++line) {
         line_start_mclk = mclk;
         start_line();

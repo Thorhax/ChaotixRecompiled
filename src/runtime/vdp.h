@@ -2,9 +2,12 @@
 // interrupts and a scanline renderer producing RGB + "backdrop" info that the
 // compositor merges with the 32X layer.
 #pragma once
+#include <memory>
 #include <cstdint>
 
 namespace chaotix {
+
+class TileReplacer;
 
 struct VdpHost {
     void* user = nullptr;
@@ -20,9 +23,37 @@ public:
     static constexpr int kMaxWidth = 320 + 2 * kMaxExtra;
 
     uint8_t vram[0x10000];
+    // Modders' tiles (issue #35), shared by copies of the machine; output only.
+    std::shared_ptr<TileReplacer> tiles;
     uint16_t cram[64];
     uint16_t vsram[40];
     uint8_t reg[32];
+
+    // Host-only: 2x4-cell sprites with this pattern at screen X 0 or 304 are
+    // not drawn (they still count for the status flags). The widened special
+    // stage hides the black columns its sprites frame the 4:3 picture with
+    // (runtime/patches.h). 0xFFFF: none.
+    uint16_t hidden_frame_tile = 0xFFFF;
+    // Host-only: plane A outside the native columns is a picture of
+    // concentric rings, given as colour (palette line 0) by distance from the
+    // centre (cx2 / 2, cy2 / 2) in quarter pixels; the widened bonus stage
+    // (runtime/patches.h, issue #38). radial_len 0: none.
+    const uint8_t* radial_lut = nullptr;
+    int radial_len = 0;
+    int radial_cx2 = 0, radial_cy2 = 0;
+    // Host-only: the plane pixels (and the backdrop) of palette lines 0 and 1
+    // in columns [alt_x0, alt_x1) of the rendered line (0 = the left edge of
+    // the left margin) take their colours from alt_cram instead: WORLD
+    // ENTRANCE's margins showing the next part of the lobby, whose palette
+    // the game loads only once the 4:3 view reaches it (runtime/patches.h,
+    // issue #61). alt_cram null: none.
+    const uint16_t* alt_cram = nullptr;
+    int alt_x0 = 0, alt_x1 = 0;
+    // Host-only: the widescreen margins the picture shows game content in
+    // (columns beyond each side, rows below the active area); 0 where they
+    // are black bars. Text replaced by sprite (sprite_text.h) treats a
+    // sprite as off screen only beyond them.
+    int shown_extra = 0, shown_extra_bottom = 0;
 
     // control port state
     bool cmd_pending = false;
@@ -69,10 +100,37 @@ public:
     // (used for 32X priority). Status flags set while rendering (sprite
     // overflow/collision) follow native-width rules regardless of `extra`.
     void render_line(int line, uint32_t* out_rgb, uint8_t* out_bg, int extra = 0);
+    // The same line, as CRAM indices where every pixel is a CRAM colour as it
+    // is (no shadow/highlight, no alt_cram): then top[x] is the index, with
+    // bit 6 set where it is the backdrop, the colours are palette_rgb(), and
+    // it returns true. Otherwise it renders out_rgb/out_bg as render_line and
+    // returns false.
+    bool render_line_indexed(int line, uint8_t* top, uint32_t* out_rgb, uint8_t* out_bg, int extra = 0);
+    // CRAM as XRGB8888 (alpha 0xFF), as of the last line rendered.
+    const uint32_t* palette_rgb() const { return palrgb_; }
 
     static uint32_t cram_to_rgb(uint16_t c);
 
 private:
+    // Output only: CRAM as render_line last converted it, and the colours.
+    uint16_t palrgb_cram_[64] = {};
+    uint32_t palrgb_[64] = {};
+    bool palrgb_valid_ = false;
+    // Output only: the sprite list as render_line last walked it, in link
+    // order, from a copy of the attribute table it was walked in. Walked
+    // again whenever the table differs from the copy.
+    struct SatEntry {
+        uint16_t y, size, pattern, x;
+        uint8_t index;  // place in the table
+    };
+    uint8_t sat_bytes_[80 * 8] = {};
+    uint32_t sat_addr_ = 0;
+    int sat_max_ = 0;  // 0: not walked yet
+    int sat_len_ = 0;
+    SatEntry sat_list_[80] = {};
+    // The list in `table` (max_sprites entries) into out; returns its length.
+    static int walk_sprites(const uint8_t* table, int max_sprites, SatEntry* out);
+
     void do_dma_68k(uint32_t len);
     void do_dma_copy(uint32_t len);
     void do_dma_fill(uint16_t data, uint32_t len);

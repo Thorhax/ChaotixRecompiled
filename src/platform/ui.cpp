@@ -1,9 +1,12 @@
 #include "ui.h"
 
+#include <SDL3_ttf/SDL_ttf.h>
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
 
+#include "renderer/game_font.h"
 #include "runtime/log.h"
 
 namespace chaotix {
@@ -23,22 +26,16 @@ namespace {
 // Point sizes at scale 1, i.e. in a 720-pixel-tall window. The pixel face is
 // an 8x8 design, so its sizes are multiples of 8 and get snapped again after
 // scaling.
-constexpr float kSizes[size_t(Font::Count_)] = {13.0f, 16.0f, 20.0f, 30.0f, 16.0f, 32.0f};
+constexpr float kSizes[size_t(Font::Count_)] = {13.0f, 16.0f, 20.0f, 30.0f, 16.0f, 32.0f, 8.0f};
 
 // Text that has not been drawn for this many frames is released. The screens
 // redraw the same strings every frame, so anything still in use is refreshed
 // long before it expires.
 constexpr uint64_t kCacheTtlFrames = 240;
 
-#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
-SDL_Color to_fcolor(Color c) {
-    return {c.r, c.g, c.b, c.a};
-}
-#else
 SDL_FColor to_fcolor(Color c) {
     return {float(c.r) / 255.0f, float(c.g) / 255.0f, float(c.b) / 255.0f, float(c.a) / 255.0f};
 }
-#endif
 
 // How many segments each quarter turn is drawn with. Taken from the outer
 // radius so that an outline's inner and outer loops have matching point
@@ -70,119 +67,6 @@ std::vector<SDL_FPoint> rounded_outline(const SDL_FRect& r, float radius, int st
 
 } // namespace
 
-#if defined(CHAOTIX_USE_SDL2) || defined(__SWITCH__)
-
-bool Ui::init(SDL_Renderer* renderer) {
-    renderer_ = renderer;
-    if (TTF_WasInit() == 0 && TTF_Init() < 0) {
-        LOGW("ui", "TTF_Init: %s", TTF_GetError());
-        return false;
-    }
-    set_sizes();
-    for (size_t i = 0; i < size_t(Font::Count_); ++i) {
-        if (!fonts_[i]) { shutdown(); return false; }
-    }
-    return true;
-}
-
-void Ui::shutdown() {
-    drop_cache();
-    for (auto*& f : fonts_) {
-        if (f) TTF_CloseFont(f);
-        f = nullptr;
-    }
-    renderer_ = nullptr;
-}
-
-void Ui::drop_cache() {
-    for (auto& [key, entry] : cache_) {
-        if (entry.tex) SDL_DestroyTexture(entry.tex);
-    }
-    cache_.clear();
-}
-
-void Ui::set_sizes() {
-    drop_cache();
-    for (size_t i = 0; i < size_t(Font::Count_); ++i) {
-        if (fonts_[i]) {
-            TTF_CloseFont(fonts_[i]);
-            fonts_[i] = nullptr;
-        }
-        const Font f = Font(i);
-        const bool bold = f == Font::Subtitle || f == Font::Title;
-        const unsigned char* data = is_pixel(f) ? font_pixel : bold ? font_semibold : font_regular;
-        const size_t len = is_pixel(f) ? font_pixel_len : bold ? font_semibold_len : font_regular_len;
-        SDL_RWops* io = SDL_RWFromConstMem(data, (int)len);
-        if (!io) break;
-        float size = kSizes[i] * scale_;
-        if (is_pixel(Font(i))) size = std::max(8.0f, std::round(size / 8.0f) * 8.0f);
-        fonts_[i] = TTF_OpenFontRW(io, 1, int(size + 0.5f));
-        if (!fonts_[i]) {
-            LOGW("ui", "TTF_OpenFontRW: %s", TTF_GetError());
-            break;
-        }
-        TTF_SetFontHinting(fonts_[i], is_pixel(f) ? TTF_HINTING_MONO : TTF_HINTING_LIGHT);
-    }
-}
-
-void Ui::begin_frame() {
-    ++frame_;
-    int ow = 0, oh = 0;
-    SDL_GetRendererOutputSize(renderer_, &ow, &oh);
-    width_ = float(ow);
-    height_ = float(oh);
-    const float want = std::clamp(std::max(float(oh), float(ow) * 0.42f) / 720.0f, 0.62f, 3.0f);
-    if (std::fabs(want - scale_) > 0.01f) {
-        scale_ = want;
-        set_sizes();
-    }
-    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
-}
-
-void Ui::end_frame() {
-    for (auto it = cache_.begin(); it != cache_.end();) {
-        if (frame_ - it->second.used > kCacheTtlFrames) {
-            if (it->second.tex) SDL_DestroyTexture(it->second.tex);
-            it = cache_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
-
-float Ui::line_height(Font f) const {
-    return fonts_[size_t(f)] ? float(TTF_FontHeight(fonts_[size_t(f)])) : 0.0f;
-}
-
-float Ui::text_width(Font f, const std::string& s) {
-    if (!fonts_[size_t(f)] || s.empty()) return 0;
-    int w = 0, h = 0;
-    if (TTF_SizeUTF8(fonts_[size_t(f)], s.c_str(), &w, &h) != 0) return 0;
-    return float(w);
-}
-
-float Ui::text(Font f, float x, float y, const std::string& s, Color c) {
-    if (!fonts_[size_t(f)] || s.empty()) return 0;
-    CacheKey key{int(f), s, uint32_t(c.r | (c.g << 8) | (c.b << 16) | (c.a << 24))};
-    auto it = cache_.find(key);
-    if (it == cache_.end()) {
-        SDL_Color sc{c.r, c.g, c.b, c.a};
-        SDL_Surface* surf = TTF_RenderUTF8_Blended(fonts_[size_t(f)], s.c_str(), sc);
-        if (!surf) return 0;
-        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer_, surf);
-        int w = surf->w, h = surf->h;
-        SDL_FreeSurface(surf);
-        if (!tex) return 0;
-        it = cache_.emplace(std::move(key), CacheEntry{tex, w, h, frame_}).first;
-    }
-    it->second.used = frame_;
-    SDL_FRect dst{x, y, float(it->second.w), float(it->second.h)};
-    SDL_RenderCopyF(renderer_, it->second.tex, nullptr, &dst);
-    return float(it->second.w);
-}
-
-#else
-
 bool Ui::init(SDL_Renderer* renderer) {
     renderer_ = renderer;
     if (!TTF_Init()) {
@@ -212,6 +96,7 @@ bool Ui::init(SDL_Renderer* renderer) {
         // A pixel face grid-fits to whole pixels or it turns to mush; the
         // text faces look better with light hinting.
         TTF_SetFontHinting(fonts_[i], is_pixel(f) ? TTF_HINTING_MONO : TTF_HINTING_LIGHT);
+        pixel_sizes_[i] = kSizes[i];
     }
     for (size_t i = 0; i < size_t(Font::Count_); ++i) {
         if (!fonts_[i]) { shutdown(); return false; }
@@ -221,6 +106,10 @@ bool Ui::init(SDL_Renderer* renderer) {
 
 void Ui::shutdown() {
     drop_cache();
+    if (game_tex_) SDL_DestroyTexture(game_tex_);
+    game_tex_ = nullptr;
+    if (ring_tex_) SDL_DestroyTexture(ring_tex_);
+    ring_tex_ = nullptr;
     for (auto*& f : fonts_) {
         if (f) TTF_CloseFont(f);
         f = nullptr;
@@ -238,14 +127,42 @@ void Ui::drop_cache() {
     cache_.clear();
 }
 
+PixelSize pixel_steps(float design, float scale, int zoom) {
+    zoom = std::clamp(zoom, 0, kMenuSizes - 1);
+    // Snap the pixel face to a whole multiple of its 8-pixel design grid, so
+    // every glyph pixel lands on a screen pixel.
+    auto snap = [](float size) { return std::max(8.0f, std::round(size / 8.0f) * 8.0f); };
+    PixelSize at{snap(design * scale), 0};
+    at.game = game_font_scale(at.face);
+    for (int z = 1; z <= zoom; ++z) {
+        // The game's letters set the size: the whole scale the factor reaches
+        // (rounding up would make LARGE half again as large as asked for on a
+        // 1080-line phone, 48 to 80 pixels for a heading), but at least one
+        // more than the size below.
+        PixelSize next;
+        next.game = std::max(at.game + 1, int(design * scale * kMenuZoom[z] / 16.0f));
+        // The face about as tall as those letters, so that the strings the
+        // game's font cannot draw ("65%") do not look a size behind the rest.
+        next.face = std::max(at.face + 8.0f, float(16 * next.game - 8));
+        at = next;
+    }
+    return at;
+}
+
 void Ui::set_sizes() {
     for (size_t i = 0; i < size_t(Font::Count_); ++i) {
         if (!fonts_[i]) continue;
         float size = kSizes[i] * scale_;
-        // Snap the pixel face to a whole multiple of its 8-pixel design grid,
-        // so every glyph pixel lands on a screen pixel.
-        if (is_pixel(Font(i))) size = std::max(8.0f, std::round(size / 8.0f) * 8.0f);
+        if (is_pixel(Font(i))) {
+            const PixelSize p = pixel_steps(kSizes[i], base_scale_, sized_zoom_);
+            size = p.face;
+            // The small glyphs are half as tall, so twice as many pixels of
+            // them fit the face.
+            game_scales_[i] = small_game_glyphs(Font(i)) ? std::max(1, int(p.face / float(GameFont::kSmallGlyphH) + 0.5f))
+                                                         : p.game;
+        }
         TTF_SetFontSize(fonts_[i], size);
+        pixel_sizes_[i] = size;
     }
     drop_cache();  // the cached textures were rendered at the old size
 }
@@ -259,8 +176,10 @@ void Ui::begin_frame() {
     // Scale from the height, but do not let a very wide, short window (or a
     // phone in landscape) shrink the text below legibility.
     const float want = std::clamp(std::max(float(oh), float(ow) * 0.42f) / 720.0f, 0.62f, 3.0f);
-    if (std::fabs(want - scale_) > 0.01f) {
-        scale_ = want;
+    if (std::fabs(want - base_scale_) > 0.01f || zoom_ != sized_zoom_ || frame_ == 1) {
+        base_scale_ = want;
+        sized_zoom_ = zoom_;
+        scale_ = want * kMenuZoom[zoom_];
         set_sizes();
     }
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
@@ -291,13 +210,151 @@ TTF_Text* Ui::acquire(Font f, const std::string& s) {
 }
 
 float Ui::line_height(Font f) const {
-    return fonts_[size_t(f)] ? float(TTF_GetFontHeight(fonts_[size_t(f)])) : 0.0f;
+    const float face = fonts_[size_t(f)] ? float(TTF_GetFontHeight(fonts_[size_t(f)])) : 0.0f;
+    // With the game's font, a line is tall enough for either, so a label in
+    // the pixel face sits in the same rows as the game's.
+    if (game_font_active() && game_glyphs(f))
+        return std::max(face, float(game_glyph_h(f) * game_scale(f)));
+    return face;
+}
+
+float Ui::letter_height(Font f) const {
+    if (game_font_active() && game_glyphs(f)) return float(game_glyph_h(f) * game_scale(f));
+    return line_height(f);
+}
+
+bool Ui::uses_game_font(Font f, const std::string& s) const {
+    if (!game_font_active() || !game_glyphs(f) || s.empty()) return false;
+    for (unsigned char c : s)
+        if (c != ' ' && (c >= 128 || game_glyph_[c] < 0)) return false;
+    return true;
+}
+
+bool Ui::set_game_font(const GameFont& font) {
+    if (game_tex_) SDL_DestroyTexture(game_tex_);
+    game_tex_ = nullptr;
+    if (!renderer_ || font.empty()) return false;
+    game_tex_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, font.width,
+                                  font.height);
+    if (!game_tex_) {
+        LOGW("ui", "game font texture: %s", SDL_GetError());
+        return false;
+    }
+    SDL_UpdateTexture(game_tex_, nullptr, font.pixels.data(), font.width * 4);
+    SDL_SetTextureBlendMode(game_tex_, SDL_BLENDMODE_BLEND);
+    // Whole-number scales of a pixel font, so nearest neighbour keeps every
+    // pixel square.
+    SDL_SetTextureScaleMode(game_tex_, SDL_SCALEMODE_NEAREST);
+    game_glyph_ = font.glyph;
+    return true;
+}
+
+bool Ui::set_portal_ring(const PortalRing& ring) {
+    if (ring_tex_) SDL_DestroyTexture(ring_tex_);
+    ring_tex_ = nullptr;
+    if (!renderer_ || ring.empty()) return false;
+    ring_tex_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, ring.width,
+                                  ring.height);
+    if (!ring_tex_) {
+        LOGW("ui", "giant ring texture: %s", SDL_GetError());
+        return false;
+    }
+    SDL_UpdateTexture(ring_tex_, nullptr, ring.pixels.data(), ring.width * 4);
+    SDL_SetTextureBlendMode(ring_tex_, SDL_BLENDMODE_BLEND);
+    return true;
+}
+
+bool Ui::portal_ring(float cx, float cy, float r, float turn) {
+    if (!ring_tex_ || r <= 0) return false;
+    bool mirrored = false;
+    const int f = portal_ring_frame(turn, &mirrored);
+    constexpr float cw = float(PortalRing::kCellW), ch = float(PortalRing::kCellH);
+    // At least the game's size, a whole number of screen pixels a pixel;
+    // smaller, nearest neighbour drops rows and columns evenly, and the ring
+    // is thick enough to keep its look (smoothing it blurs it).
+    float k = 2.0f * r / ch;
+    if (k >= 1.0f) k = std::floor(k);
+    const float w = std::round(cw * k), h = std::round(ch * k);
+    const SDL_FRect dst{std::round(cx - w * 0.5f), std::round(cy - h * 0.5f), w, h};
+    image(ring_tex_, {float(f) * cw, 0, cw, ch}, dst, false, mirrored);
+    return true;
+}
+
+float Ui::game_text(Font f, float x, float y, const std::string& s, Color c, int scale) {
+    const int k = scale > 0 ? scale : game_scale(f);
+    const float cw = float(GameFont::kGlyphW * k), ch = float(game_glyph_h(f) * k);
+    const float row = small_game_glyphs(f) ? float(GameFont::kGlyphH) : 0.0f;
+    // The game's colours are the point, so the colour asked for only sets
+    // how bright they are: full for the selected entry and headings, dimmer
+    // for the rest, as the pixel face's greys would have been.
+    const int bright = std::max({int(c.r), int(c.g), int(c.b)});
+    // Not below about two thirds: the shaded yellow turns muddy darker than
+    // that, and the marker already says which entry is chosen. The small
+    // letters may go a little further, so a note beside an entry reads as
+    // its caption.
+    const int floor = small_game_glyphs(f) ? 140 : 170;
+    const Uint8 mod = Uint8(std::clamp(bright * 255 / int(theme::text.b), floor, 255));
+    if (game_tint_) SDL_SetTextureColorMod(game_tex_, c.r, c.g, c.b);
+    else SDL_SetTextureColorMod(game_tex_, mod, mod, mod);
+    SDL_SetTextureAlphaMod(game_tex_, c.a);
+    // Whole pixels, like the pixel face: a glyph between screen pixels would
+    // be sampled unevenly.
+    const float x0 = std::round(x), y0 = std::round(y + (line_height(f) - ch) * 0.5f);
+    for (size_t i = 0; i < s.size(); ++i) {
+        const unsigned char ch_ = static_cast<unsigned char>(s[i]);
+        if (ch_ == ' ') continue;
+        const int g = game_glyph_[ch_];
+        const SDL_FRect src{float(g * GameFont::kGlyphW), row, float(GameFont::kGlyphW), float(game_glyph_h(f))};
+        const SDL_FRect dst{x0 + float(i) * cw, y0, cw, ch};
+        SDL_RenderTexture(renderer_, game_tex_, &src, &dst);
+    }
+    return float(s.size()) * cw;
+}
+
+void Ui::image(SDL_Texture* tex, const SDL_FRect& src, const SDL_FRect& dst, bool smooth, bool flip_h,
+               uint8_t alpha) {
+    if (!tex || dst.w <= 0 || dst.h <= 0) return;
+    SDL_ScaleMode was = SDL_SCALEMODE_LINEAR;
+    SDL_GetTextureScaleMode(tex, &was);
+    SDL_SetTextureScaleMode(tex, smooth ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+    SDL_SetTextureAlphaMod(tex, alpha);
+    SDL_RenderTextureRotated(renderer_, tex, &src, &dst, 0.0, nullptr, flip_h ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+    SDL_SetTextureAlphaMod(tex, 255);
+    SDL_SetTextureScaleMode(tex, was);
+}
+
+void Ui::clip(const SDL_FRect* r) {
+    if (!renderer_) return;
+    if (!r) {
+        SDL_SetRenderClipRect(renderer_, nullptr);
+        return;
+    }
+    const int x0 = int(std::floor(r->x)), y0 = int(std::floor(r->y));
+    const SDL_Rect c{x0, y0, std::max(0, int(std::ceil(r->x + r->w)) - x0), std::max(0, int(std::ceil(r->y + r->h)) - y0)};
+    SDL_SetRenderClipRect(renderer_, &c);
+}
+
+void Ui::image_cover(SDL_Texture* tex, float tex_w, float tex_h, const SDL_FRect& r, uint8_t alpha) {
+    if (!tex || tex_w <= 0 || tex_h <= 0 || r.w <= 0 || r.h <= 0) return;
+    // The largest part of the picture with r's shape, centred.
+    SDL_FRect src{0, 0, tex_w, tex_h};
+    if (tex_w / tex_h > r.w / r.h) {
+        src.w = tex_h * r.w / r.h;
+        src.x = (tex_w - src.w) * 0.5f;
+    } else {
+        src.h = tex_w * r.h / r.w;
+        src.y = (tex_h - src.h) * 0.5f;
+    }
+    SDL_SetTextureAlphaMod(tex, alpha);
+    SDL_RenderTexture(renderer_, tex, &src, &r);
+    SDL_SetTextureAlphaMod(tex, 255);
 }
 
 float Ui::text_width(Font f, const std::string& s) {
     // Measured without creating a cached TTF_Text: shorten() below asks for
     // the width of every intermediate string, and caching those would fill
     // the cache with strings that are never drawn.
+    if (uses_game_font(f, s)) return float(s.size() * GameFont::kGlyphW * size_t(game_scale(f)));
     if (!fonts_[size_t(f)] || s.empty()) return 0;
     int w = 0, h = 0;
     if (!TTF_GetStringSize(fonts_[size_t(f)], s.c_str(), s.size(), &w, &h)) return 0;
@@ -305,16 +362,22 @@ float Ui::text_width(Font f, const std::string& s) {
 }
 
 float Ui::text(Font f, float x, float y, const std::string& s, Color c) {
+    if (uses_game_font(f, s)) return game_text(f, x, y, s, c);
     TTF_Text* t = acquire(f, s);
     if (!t) return 0;
     TTF_SetTextColor(t, c.r, c.g, c.b, c.a);
-    TTF_DrawRendererText(t, x, y);
+    // A pixel-face string among the game font's lines is centred in the
+    // taller line, so both sit on the same middle.
+    if (game_font_active() && game_glyphs(f) && fonts_[size_t(f)])
+        y += (line_height(f) - float(TTF_GetFontHeight(fonts_[size_t(f)]))) * 0.5f;
+    // Whole pixels only: at a fractional position the glyphs are sampled
+    // between texels, which blurs the pixel face and picks up thin lines
+    // from the neighbouring glyphs in the atlas (issue #5).
+    TTF_DrawRendererText(t, std::round(x), std::round(y));
     int w = 0, h = 0;
     TTF_GetTextSize(t, &w, &h);
     return float(w);
 }
-
-#endif
 
 std::string Ui::shorten(Font f, const std::string& s, float max_w, bool is_path) {
     if (max_w <= 0 || text_width(f, s) <= max_w) return s;
@@ -349,6 +412,20 @@ std::string Ui::shorten(Font f, const std::string& s, float max_w, bool is_path)
 
 float Ui::text_fit(Font f, float x, float y, float max_w, const std::string& s, Color c,
                    bool is_path) {
+    // The game's small letters are square, so a line of them is wider than
+    // the pixel face's. One that does not fit comes a scale smaller before it
+    // is shortened, and is shortened at the smallest: a hint along the foot
+    // of a narrow window keeps as much of itself as it can.
+    if (small_game_glyphs(f) && uses_game_font(f, s) && text_width(f, s) > max_w && game_scale(f) > 1) {
+        int k = game_scale(f) - 1;
+        while (k > 1 && float(s.size() * GameFont::kGlyphW * size_t(k)) > max_w) --k;
+        const size_t fits = max_w > 0 ? size_t(max_w) / size_t(GameFont::kGlyphW * k) : 0;
+        if (s.size() <= fits) return game_text(f, x, y, s, c, k);
+        if (fits <= 3) return 0;
+        std::string cut = s.substr(0, fits - 3);
+        while (!cut.empty() && cut.back() == ' ') cut.pop_back();
+        return game_text(f, x, y, cut + "...", c, k);
+    }
     return text(f, x, y, shorten(f, s, max_w, is_path), c);
 }
 
@@ -360,7 +437,7 @@ void Ui::rect(const SDL_FRect& r, Color c, float radius) {
         return;
     }
     const std::vector<SDL_FPoint> pts = rounded_outline(r, radius, arc_steps(radius));
-    const auto col = to_fcolor(c);
+    const SDL_FColor col = to_fcolor(c);
     std::vector<SDL_Vertex> verts;
     verts.reserve(pts.size() + 1);
     verts.push_back({{r.x + r.w * 0.5f, r.y + r.h * 0.5f}, col, {0, 0}});
@@ -385,7 +462,7 @@ void Ui::outline(const SDL_FRect& r, Color c, float radius, float thickness) {
     const std::vector<SDL_FPoint> out = rounded_outline(r, radius, steps);
     const std::vector<SDL_FPoint> in =
         rounded_outline(inner, std::max(0.0f, radius - thickness), steps);
-    const auto col = to_fcolor(c);
+    const SDL_FColor col = to_fcolor(c);
     std::vector<SDL_Vertex> verts;
     verts.reserve(out.size() * 2);
     for (size_t i = 0; i < out.size(); ++i) {
@@ -407,6 +484,62 @@ void Ui::outline(const SDL_FRect& r, Color c, float radius, float thickness) {
 void Ui::panel(const SDL_FRect& r, Color fill, Color border, float radius, float thickness) {
     rect(r, fill, radius);
     outline(r, border, radius, thickness);
+}
+
+void Ui::poly(const SDL_FPoint* pts, int n, Color c) {
+    if (n < 3) return;
+    const SDL_FColor col = to_fcolor(c);
+    std::vector<SDL_Vertex> verts;
+    verts.reserve(size_t(n));
+    for (int i = 0; i < n; ++i) verts.push_back({pts[i], col, {0, 0}});
+    std::vector<int> idx;
+    idx.reserve(size_t(n - 2) * 3);
+    for (int i = 1; i + 1 < n; ++i) {
+        idx.push_back(0);
+        idx.push_back(i);
+        idx.push_back(i + 1);
+    }
+    SDL_RenderGeometry(renderer_, nullptr, verts.data(), n, idx.data(), int(idx.size()));
+}
+
+namespace {
+// Enough segments that the edge looks round at the size it is drawn.
+int ellipse_steps(float rx, float ry) { return std::clamp(int(std::max(rx, ry) * 0.9f) + 12, 16, 96); }
+} // namespace
+
+void Ui::ellipse(float cx, float cy, float rx, float ry, Color c) {
+    if (rx <= 0 || ry <= 0) return;
+    const int n = ellipse_steps(rx, ry);
+    std::vector<SDL_FPoint> pts(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        const float a = float(i) * 2.0f * SDL_PI_F / float(n);
+        pts[size_t(i)] = {cx + std::cos(a) * rx, cy + std::sin(a) * ry};
+    }
+    poly(pts.data(), n, c);
+}
+
+void Ui::ellipse_band(float cx, float cy, float rx, float ry, float thickness, Color c) {
+    if (rx <= 0 || ry <= 0 || thickness <= 0) return;
+    // Thicker than the ellipse is narrow: what is left is solid.
+    if (thickness >= std::min(rx, ry)) { ellipse(cx, cy, rx, ry, c); return; }
+    const int n = ellipse_steps(rx, ry);
+    const SDL_FColor col = to_fcolor(c);
+    std::vector<SDL_Vertex> verts;
+    verts.reserve(size_t(n) * 2);
+    for (int i = 0; i < n; ++i) {
+        const float a = float(i) * 2.0f * SDL_PI_F / float(n);
+        const float ca = std::cos(a), sa = std::sin(a);
+        verts.push_back({{cx + ca * rx, cy + sa * ry}, col, {0, 0}});
+        verts.push_back({{cx + ca * (rx - thickness), cy + sa * (ry - thickness)}, col, {0, 0}});
+    }
+    std::vector<int> idx;
+    idx.reserve(size_t(n) * 6);
+    for (int i = 0; i < n; ++i) {
+        const int a = i * 2, b = a + 1, c2 = ((i + 1) % n) * 2, d = c2 + 1;
+        idx.push_back(a); idx.push_back(b); idx.push_back(c2);
+        idx.push_back(b); idx.push_back(d); idx.push_back(c2);
+    }
+    SDL_RenderGeometry(renderer_, nullptr, verts.data(), int(verts.size()), idx.data(), int(idx.size()));
 }
 
 SDL_FRect Ui::pill(float x, float y, const std::string& label, Color fg, Color bg) {

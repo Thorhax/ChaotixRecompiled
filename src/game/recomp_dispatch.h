@@ -17,7 +17,19 @@ struct RecompStatus {
 // built (or enable == false) the reference interpreters are used.
 RecompStatus install_recompiled_code(Machine& m, bool enable);
 
+// The generated code serves one machine at a time: the one installed last.
+// This points it at another machine that has had install_recompiled_code
+// (the music player's, frontend/jukebox.h, while the game is held), and
+// forgets every cached check of SH-2 code in RAM, which was made against the
+// other machine's memory. Returns the machine it served before (null if
+// none). Call it between frames only, from the thread that runs both.
+Machine* bind_recompiled_code(Machine& m);
+
 void print_recomp_stats(const Machine& m);
+
+// Whether generated code fast-forwards wait loops (on by default; the result
+// is the same either way, recomp_api.h). For comparisons and tests.
+void set_idle_skip(bool on);
 
 struct DispatchSnapshot {
     bool recompiled = false;

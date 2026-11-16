@@ -21,7 +21,7 @@
 | SDL3 前端（Windowed/Borderless/Fullscreen、HiDPI、integer/fit/stretch、aspect ratio、鍵盤/手把/觸控、debug overlay） | ✅（Windows 已實測） | `--autotest` 讀回實際輸出畫面 |
 | 音效（Z80 直譯器 + YM2612 FM + SN76489 PSG + PWM 混音 → SDL3 audio stream） | ✅ 第一版（音質未經聽感/逐 sample 驗證） | WAV 輸出 + 頻譜檢查（有音高與節奏結構） |
 | 真正寬螢幕（關卡中最多 448×224 ≈ 1.87:1，涵蓋 16:9 / 16:10；其他場景 4:3 加側邊黑條） | ✅ | `lockstep_widescreen`、`golden_frames_widescreen`、36,000 幀寬螢幕 lockstep；見 §8 |
-| Android / iOS / macOS / Linux 建置 | ⏳ `CMakePresets.json`、Android Gradle 專案、iOS Info.plist 已建立；**尚未在這些平台實際建置** | 見 §9 |
+| Android / iOS / macOS / Linux 建置 | ✅ Android（Gradle）、macOS .app 與 iOS .ipa（`scripts/package_apple.sh`，見 [docs/BUILDING_APPLE.md](docs/BUILDING_APPLE.md)）；macOS（M1）上全部測試通過、lockstep bit-identical；iOS 只在模擬器上跑過 | 見 §9 |
 
 實測數據（Windows x64、MinGW GCC 15、Release）：
 - 重編譯後執行：約 **0.83–0.92 ms / frame**（原機一幀 16.7 ms），SDL 前端鎖定 59.92 Hz。
@@ -96,7 +96,7 @@ MCLK = 53.693175 MHz；1 條掃描線 = 3420 MCLK；1 幀 = 262 線；幀率 59.
 |---|---|---|
 | 間接跳躍 / jump table | SH-2 指令迴圈 `jmp @r2`；68K `jsr tbl(pc,d0.w)` 物件分派（bra table）、物件 handler 指標 | recursive descent + 靜態 jump table / offset table / code pointer 恢復 + **trace-guided**（coverage 檔提供動態入口）；仍未知者由直譯器 fallback，永不出錯只會變慢 |
 | 執行期產生的跳板 | `0xFFFFE1A4: jmp ($8F5380).l`（每關改寫目標） | dispatcher 以直譯器相同語意執行 `JMP abs.l` 後接回原生碼 |
-| 等待迴圈（效能） | Slave `dt r0; bf` 延遲、Master 輪詢 COMM0 | 產生碼中對無狀態自迴圈做精確 fast-forward（同一時間片內外部狀態不變）；lockstep 證明等價 |
+| 等待迴圈（效能） | Slave `dt r0; bf` 延遲、Master 輪詢 COMM0 與 32X VDP 狀態（等 V-blank）、68K 等 V-int 旗標 | 產生碼中對無狀態自迴圈做精確 fast-forward（同一時間片內外部狀態不變；隨時間改變的 VDP 狀態算到改變前一刻）；lockstep 證明等價（docs/IDLE_SKIP.md） |
 | 在 RAM 執行的程式 | SH-2 image 在 SDRAM；Slave 在 cache RAM；68K 在 `0xFF0200`、`0xFFFFC0xx` 跳板 | 以「code space」描述 runtime 位址 ↔ ROM bytes；RAM code 產生**驗證範圍**，runtime 比對 RAM 與 ROM，被改寫就改用直譯器 |
 | Self-modifying / 覆寫 | 可能載入 overlay | 寫入含程式碼的 SDRAM page / cache 範圍會遞增 **code epoch**，下次進入時重新驗證 |
 | Bank switching | `0x900000` 視窗 | 以 `(pc, bank)` 當 key 產生程式碼；dispatcher 依目前 bank 查表 |
@@ -191,12 +191,12 @@ ROM bytes ──decoder──▶ m68k::Insn / sh2::Insn        （每條指令�
 ## 7. 68K ↔ SH-2 同步模型
 
 1. 時間單位為 MCLK。每條掃描線切成 4 個固定時間片（855 MCLK）。
-2. 每個時間片依序執行：68K → Master SH-2 → Slave SH-2，各自執行到時間片終點（可超出少量 cycles，下個時間片扣回）。
+2. 每個時間片依序執行：68K → Z80 → Master SH-2 → Slave SH-2，各自執行到時間片終點（可超出少量 cycles，下個時間片扣回）。68K 寫 Z80 BUSREQ / RESET 時，先把 Z80 執行到 68K 當下的時間（`Machine::z80_catch_up`，不超過本掃描線終點），再改變狀態：Z80 恰好執行到被 68K 停下為止，如同硬體（issue #50，docs/ISSUE_50_SOUND_TEST.md）。
 3. 中斷在掃描線開始時產生（MD V-int 於第 224 線、H-int 計數器、32X V/H、FB swap），在 CPU 的下一個 block 邊界被接受；CMD/PWM 中斷在寫入/計時器觸發時立即更新 pending。
 4. comm port、FIFO、FS/FEN/PEN 狀態讀取使用「讀取者自己的當下時間」（`m68k_now_mclk` / `sh2_now_mclk`）計算 HBLANK/VBLANK。
 5. 整個模型是**確定性的**：相同輸入 → 相同結果，不依賴主機速度或執行緒排程。
 
-*計畫中（最佳化）*：偵測 busy-wait 迴圈（comm 輪詢）並快轉 cycles，必須保持 lockstep 一致。
+等待迴圈快轉（issue #62，見 [docs/IDLE_SKIP.md](docs/IDLE_SKIP.md)）：產生碼辨識「只讀不寫、沒有跨迭代狀態」的自迴圈（SH-2 輪詢、`dt rN; bf` 延遲、68K 等 RAM/COMM），把本時間片內結果不變的迭代一次扣掉 cycles；讀取值會隨時間改變的 32X VDP 狀態（HBLK/PEN）則精確算出會變的那一刻，只跳到那之前。直譯器仍逐次執行，lockstep 證明結果完全相同；`chaotix_headless --no-idle-skip` 可關閉比較。
 
 ---
 
@@ -237,10 +237,14 @@ Machine（simulation）                                   Platform（SDL3）
 | 環（MD sprite，68K `0x1044`） | 環以 MD sprite 繪製；sprite 座標 X 只在 `0x70 ≤ x < 0x1D0`（畫面 −16…335）時才輸出。環物件本身在鏡頭前方 448–576 px 就已生成。 | 比較前把 d2 暫時 +E / −E、比較後還原，等效把範圍放寬為 [−16−E, 336+E)，輸出的 sprite 座標不變。 |
 | 32X 物件的畫面外旗標（68K `0x182E`） | 物件在鏡頭 −64…+384 px 外設定 off-screen 旗標。 | 已涵蓋 E ≤ 64，不需修改。 |
 | Camera clamp（68K `0x9A76`，所有 zone） | camera X（`$FFDFE8`）夾在 plane A 結構（`$FFC1DE`）的 [$A, $8]。 | 兩個界線各內縮 E（房間比畫面窄時置中），邊界不會顯示關卡外。 |
-| 場景判斷 | 關卡每幀呼叫 plane 更新 `0x984E`/`0x98C4`。 | 最近 8 幀內有執行 → 寬螢幕；否則（標題、選單、特殊關卡、過場）4:3 + 黑邊。 |
-| 關卡邊界 | 鏡頭夾制（上）讓邊界通常落在關卡內。房間比畫面窄時鏡頭置中，邊界會超出該房間的鏡頭範圍，但那裡仍是引擎從關卡配置串流進來的圖塊（實測：選關大廳等窄房間看起來是連續的場景）。 | `patches::margin_cut` 只把「關卡原點左側」（沒有配置資料）的部分塗黑。 |
+| 場景判斷 | 關卡每幀呼叫 plane 更新 `0x984E`/`0x98C4`。 | 最近 8 幀內有執行 → 寬螢幕；否則（標題、選單、過場）4:3 + 黑邊。WORLD ENTRANCE（zone 7）：大廳（關卡 0、1）與最終頭目（2）為寬螢幕，結局場景（3-6）維持 4:3（issue #61，見 `docs/ISSUE_61_WORLD_ENTRANCE.md`；原本 issue #13、#56 一律 4:3）。 |
+| 特殊關卡（模式 `0x20`） | 主 SH-2 以多邊形畫管道（SDRAM 中執行期載入的程式）。光柵器 `$06004858` 以 SDRAM `0x06003844` 的矩形（16/303/4/219）裁切；x 用 `SHLR8`（邏輯位移）轉換，所以 x < 0 會壞掉。 | 整個管道往右投影 C px（五處 `ADD #80` 改為 80 + C/2），矩形改為 [0, 319 + 2C]，host 把多邊形像素移回 C、邊界外寫入影子緩衝；每幀清畫面的 fill 認得後清整條加寬的行。詳見 `docs/ISSUE_18_SPECIAL_STAGE.md`（issue #18）。 |
+| 特殊關卡結算畫面、獎勵關卡 | 兩者都由特殊關卡的同一套 SH-2 多邊形程式繪製，但用整個畫面的矩形（0/319/0/223）。結算畫面：主 SH-2 閒置時每個 vblank 呼叫 `0x06007640`，畫 `0x06007688` 的固定 2D 多邊形表（背景多邊形都碰到 x = 0 或 319）。獎勵關卡：隧道是 MD plane A 的同心圓圖（只到 4:3 邊緣，色盤循環），道具與方塊側面由開機碼 `0x06000CD0` 以中心 X 160（`0x06000CE6` 的 `MOV #-96,R10`）繪製。 | 同特殊關卡的機制（矩形 [0, 319 + 2C]、多邊形像素移回 C）。結算畫面：表內頂點 x + C，邊緣頂點推到加寬後的邊緣；只在加寬的特殊關卡之後才判定。獎勵關卡：中心改為 160 + C，該處理常式呼叫的縮放 blit 由 SH-2 hook 把 X 移回；邊界的同心圓由畫面本身量出的「半徑→色號」表延伸（`Vdp::radial_lut`）。詳見 `docs/ISSUE_38_BONUS_STAGE.md`（issue #38、#39）。 |
+| WORLD ENTRANCE（zone 7，issue #61） | 大廳的事件、色盤、背景與彈射器都跟著鏡頭；plane B 是一組 512 px 的背景圖（`$889144` 依 plane A X 選圖），在 512 px 環內逐行捲動。色盤依 plane A X 分區（`$88922A` 的界線 0x180/0x4C0/0x900/0x1010，色表 `$9BA764`）。最終頭目的場地由特殊關卡的多邊形程式以整個畫面的矩形繪製。 | zone 7 不動 camera clamp；大廳的 plane B 不位移環（plane A 照常位移）；鏡頭範圍比加寬畫面窄的房間（選關室、Combi Catcher）範圍外塗黑，SH-2 裁切也維持原生；邊界外屬於下一區的欄位以該區色盤畫（`Vdp::alt_cram`）。最終頭目用特殊關卡的機制（`PolyScene::Boss`：投影中心右移 C、矩形 [0, 319 + 2C]、像素移回 C），開場白閃與清除線填滿整條加寬線。WIDE LOBBY 選項移除。 |
+| 關卡邊界 | 鏡頭夾制（上）讓邊界通常落在關卡內。房間比畫面窄時鏡頭置中，邊界會超出該房間的鏡頭範圍，但那裡仍是引擎從關卡配置串流進來的圖塊。大廳（WORLD ENTRANCE）例外：旁邊是室外入口等其他區域，因此大廳保持 4:3（issue #13）。 | `patches::margin_cut` 只把「關卡原點左側」（沒有配置資料）的部分塗黑。 |
 | HUD | 由 32X 繪於固定位置 | 保持在原生 4:3 區域內（未移動）。 |
-| 遊戲模式分派器（68K `0x3262`） | `move.w $FFDFDE,d0; andi.w #$78,d0; jsr $883270(pc,d0.w)` — 16 個模式各一格 `jmp`。每個模式處理常式自己跑迴圈，只有在該場景結束時才回到這裡，因此這是遊戲在兩個場景之間唯一會經過的點。 | 不改變執行；只在此處套用 host 要求的關卡（TIME ATTACK，見 §8.3）。因為直譯器與生成碼在同一條指令前呼叫同一個 hook，lockstep 仍 bit-identical（測試 `stage_select_starts_the_chosen_level`）。 |
+| 環狀繩（Combi Ring，issue #43） | 角色更新 `$889C10`、繩力 `$8913A2`/`$891494`、超出長度拉回 `$89138E`/`$891392`、等兩人的物件比較（`tether::kBothObjects`）。 | 選項開啟時才動：力道縮放、FOLLOW 不拉玩家、SOLO 依遊戲自己的方式（狀態 $14）讓搭檔離場。`runtime/tether.{h,cpp}`，見 docs/RING_TETHER.md。 |
+| 遊戲模式分派器（68K `0x3262`） | `move.w $FFDFDE,d0; andi.w #$78,d0; jsr $883270(pc,d0.w)` — 16 個模式各一格 `jmp`。每個模式處理常式自己跑迴圈，只有在該場景結束時才回到這裡，因此這是遊戲在兩個場景之間唯一會經過的點。 | 不改變執行；只在此處套用 host 要求的關卡（TIME ATTACK，見 §8.3），以及開啟 LOBBY SHORTCUTS 時玩家選的搭檔（`$FFE03A`）與時段（`$FFDFF6`）（issue #44，`runtime/lobby.{h,cpp}`，見 docs/LOBBY_SHORTCUTS.md）；並在換場景時清掉 SOLO 叫回搭檔的記號（issue #43）。因為直譯器與生成碼在同一條指令前呼叫同一個 hook，lockstep 仍 bit-identical（測試 `stage_select_starts_the_chosen_level`）。 |
 
 **限制 / 已知差異**
 - E 上限 64（plane 環狀緩衝兩側至少保留 16 px 餘裕）。21:9 以上會在外側 pillarbox。
@@ -401,7 +405,7 @@ CMakeLists.txt
 | SRAM 位置、控制方式、checksum | ✅ 已驗證 |
 | 遊戲不依賴 cache 不一致（stale cache） | UNKNOWN — requires ROM analysis |
 | DREQ FIFO 使用的場景與傳輸大小 | UNKNOWN — requires ROM analysis（已實作一般路徑） |
-| 特殊關卡 / 過場的 32X 繪圖模式（RLE / direct color） | UNKNOWN — requires ROM analysis |
+| 特殊關卡 / 過場的 32X 繪圖模式（RLE / direct color） | 特殊關卡：✅ packed 8 bpp、512-byte 行，多邊形以 auto fill 繪製（見 `docs/ISSUE_18_SPECIAL_STAGE.md`）；過場 UNKNOWN |
 | Camera / 物件啟動視窗 / culling 的資料結構（寬螢幕所需） | UNKNOWN — requires ROM analysis |
 | 音效驅動與 68K 的握手是否要求 Z80 實際執行 | ✅ Z80 已執行；流程不受阻，關卡載入時序與 Z80 互動略有變化（golden hash 已更新） |
 | 6 按鍵手把在本作中的用途 | ✅ 已驗證：X / Y / Z / MODE 完全未使用，本作是三鍵遊戲（見 §8.4） |

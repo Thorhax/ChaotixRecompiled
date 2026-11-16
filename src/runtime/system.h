@@ -16,11 +16,16 @@
 #include "runtime/rom.h"
 #include "runtime/stage_select.h"
 #include "runtime/vdp.h"
+#include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace chaotix {
+
+class SpriteRecorder;
+class CharacterPalettes;
 
 constexpr int kMclkPerLine = 3420;
 constexpr int kLinesPerFrameNTSC = 262;
@@ -31,13 +36,6 @@ constexpr int kScreenWidth = Vdp::kMaxWidth;  // framebuffer stride (native + wi
 constexpr int kScreenHeight = 224 + 16;  // active lines + widescreen rows (patches::kMaxWideExtraBottom)
 constexpr int kMclkPerAudioSample = 1008;  // YM2612 native rate: MCLK / 7 / 144
 constexpr double kAudioRate = 53693175.0 / kMclkPerAudioSample;
-
-enum class EdgeBlendMode : uint8_t {
-    None = 0,
-    SoftFeather = 1,
-    Vignette = 2,
-    DarkPillars = 3
-};
 
 // SH-2 on-chip peripherals (per CPU).
 struct Sh2OnChip {
@@ -59,7 +57,7 @@ struct Sh2OnChip {
     // Misc
     uint8_t ccr = 0, sbycr = 0;
     uint32_t bsc[8] = {};
-    uint8_t cache_data[4096];
+    uint8_t cache_data[4096] = {};  // zero before any reset() too (tests, tooling)
 };
 
 struct Pwm {
@@ -134,6 +132,9 @@ struct SliceInfo {
     int32_t budget = 0;
 };
 
+// Save states (runtime/save_state.cpp, `transfer`) list the fields below that
+// the emulation depends on: a new one belongs there too, or a loaded state
+// will not carry on as the machine would have.
 class Machine {
 public:
     Machine();
@@ -158,13 +159,56 @@ public:
     // VRAM, so machines compared in lockstep must use the same value.
     int wide_extra = 0;
     int wide_extra_bottom = 0;  // extra rows below the screen (see patches.h)
-    // Widescreen levels: draw the HUD at the left edge of the wide image
-    // rather than where the 4:3 picture would have it (patches.h).
-    bool wide_hud_edge = false;
+    // Whether the player has widescreen turned on at all, as opposed to how
+    // wide the margins currently are. The margins follow the window, which
+    // changes while a level runs; the ring shift is latched at a level load
+    // and must not, or resizing the window leaves that level in 4:3.
+    bool wide_enabled = false;
+    // Host only: the menu's 32X picture is its tiled backdrop this frame
+    // (patches::menu_backdrop_tiled), worked out on its first line.
+    bool menu_tiled = false;
+    // The former WIDE LOBBY option (issue #21). It no longer changes anything
+    // (runtime/patches.h, wide_zone: the lobby is widened without it, and the
+    // INTRODUCTION Eggman scene stays 4:3); kept so that recordings, ghosts
+    // and netplay settings that carry it still read.
+    bool wide_everywhere = false;
+    // Widened levels draw the HUD at the picture's left edge rather than at
+    // its 4:3 place (issue #28; runtime/patches.h, kHudBaseX).
+    bool wide_hud_edges = false;
+    // How far left the HUD is drawn this frame (0: its 4:3 place). Set by
+    // patches::begin_frame every frame before the game runs, so not saved.
+    int hud_shift = 0;
+    int debug_layer = 0;  // output only: 1 = the Mega Drive layer alone, 2 = the 32X layer alone
     int plane_shift = 0;               // W latched by the plane streaming patch
     uint64_t level_seen_frame = ~0ull; // last frame the level engine ran (patches.cpp)
+    uint64_t full_redraw_frame = ~0ull; // last frame a scene redrew both planes
+    uint64_t level_scene = 0;          // scene the level engine last ran in (patches.cpp)
     bool wide_active = false;          // margins show game content this frame
+    bool special_entry = false;        // the way into the special stage (patches::special_stage_entry)
     bool clip_overridden = false;      // 32X clip rect widened by the patch
+    // A scene drawn by the special stage's polygon code is the widescreen
+    // scene this frame (wide_active is then also set): the stage, its results
+    // screen or the bonus stage (poly_scene). Their polygons are filled, not
+    // blitted: see patches.h.
+    bool wide_special = false;
+    bool special_rect_overridden = false;  // its polygon clip rect widened
+    // Which polygon scene is widened (patches::PolyScene); wide_special is
+    // set for all of them.
+    uint8_t poly_scene = 0;
+    bool results_table_patched = false;  // the results screen's polygons widened
+    bool bonus_clip_overridden = false;  // the bonus stage's blitter clip widened
+    // The bonus stage's rings by radius (Vdp::radial_lut); render only.
+    uint8_t radial_lut[512 * 4] = {};
+    int radial_len = 0;
+    // WORLD ENTRANCE's margins (patches::lobby_margins, issue #61), worked
+    // out at the start of every frame for its picture; render only. Columns
+    // [lobby_alt_x0, lobby_alt_x1) of the widened line show the next part of
+    // the lobby in its own colours (Vdp::alt_cram), and lobby_cut is black.
+    uint16_t lobby_cram[32] = {};
+    bool lobby_alt = false;
+    int lobby_alt_x0 = 0, lobby_alt_x1 = 0;
+    int lobby_cut_left = 0, lobby_cut_right = 0;
+    int special_shift = 0;             // px its polygons are drawn right of true
     int cull_shift = 0;                // pending d2 offset inside the ring cull patch
     bool plane_fill_clamped = true;    // last plane fill used the unmasked (clamped) form
     // A stage the host has asked the game to start (TIME ATTACK). A game mode
@@ -172,16 +216,80 @@ public:
     // dispatcher, the one place the game passes through between scenes.
     stage_select::Request stage_request;
     bool stage_pending = false;
+    // A game mode ($FFDFDE) and sub-mode ($FFDFE0) the host wants, applied by
+    // the same hook once the boot scene is over; -1 for none. Only the music
+    // player's own machine sets it (frontend/jukebox.h: the game's OPTIONS
+    // screen), and that machine is never played or saved, so save states
+    // leave it out.
+    int mode_request = -1;
+    int submode_request = 0;
+    // Lobby shortcuts (issue #44, runtime/lobby.h): the partner (character
+    // id) and time of day (0-3) the player chose, put into the game by the
+    // same hook each time it starts the lobby or an attraction; -1 leaves
+    // the game's own, and so does lobby::kPartnerNone (-2, NONE: the front
+    // end plays the attractions SOLO, issue #55). A setting like the
+    // widescreen ones: machines compared in lockstep must have the same
+    // values.
+    int lobby_partner = -1;
+    int lobby_time = -1;
+    // Ring tether options (issue #43, runtime/tether.h): tether::Strength
+    // and tether::Partner, 0 the original game. Settings like the lobby
+    // shortcuts': the app gives them again before every frame, and machines
+    // compared in lockstep must have the same values.
+    uint8_t tether_strength = 0;
+    uint8_t tether_partner = 0;
+    // Latched by the SOLO partner's hook: CALL brought the partner back, so
+    // it stays until the next scene. In save states.
+    bool tether_called = false;
+    // FOLLOW's note of where the player stood before the game put one of the
+    // two back on the tether's circle; used and dropped by the next
+    // instruction's hook, within the same routine, so never in a save state.
+    bool tether_clamp_saved = false;
+    uint32_t tether_clamp_x = 0, tether_clamp_y = 0;
+    // Music replaced by files (audio/music_mods.h): which music ids the host
+    // plays itself, and the music requests and commands the game has made
+    // since the host last drained them (patches.h, kSoundRequest).
+    std::array<bool, 0x2A> music_replaced{};
+    std::vector<uint8_t> music_events;
+    // PWM samples replaced by files (audio/sample_mods.h): which samples the
+    // host plays itself (the 32X is given the silent one instead), and the
+    // notes the 68K has passed on since the host last took them, with when.
+    std::array<bool, 32> pwm_replaced{};
+    bool pwm_replacing = false;
+    struct PwmNote {
+        uint64_t mclk;
+        uint8_t voice;
+        uint16_t command;
+    };
+    std::vector<PwmNote> pwm_events;
+    // Host-side level of the 32X PWM output (see Ym2612::gain).
+    float pwm_gain = 1.0f;
+    float pwm_gain_now = 1.0f;  // eased towards pwm_gain (audio/gain_ramp.h)
     // Host-side shadow of the 32X frame buffers for widescreen margins: while
     // wide_active, sprite (overwrite image) writes outside native columns land
     // here instead of in the line padding, which the game uses as storage.
     // Render-only; never read by the emulated CPUs.
-    uint8_t fb_margin[2][0x20000];
+    uint8_t fb_margin[2][0x20000] = {};
     // Tooling hooks: writes to the 32X draw buffer (offset, value, size,
     // overwrite image) and auto fills (word address, word count, data).
     void (*on_fb_write)(void* user, uint32_t off, uint32_t v, int size, bool overwrite) = nullptr;
     void (*on_fb_fill)(void* user, uint32_t word_addr, uint32_t words, uint16_t data) = nullptr;
     void* on_fb_write_user = nullptr;
+    // 32X sprite recording (runtime/sprite_record.h): the blitters' calls as
+    // draw lists, and with a sprite pack (runtime/sprite_replace.h) the 32X
+    // layer composed again with replacement graphics, which render_line32x
+    // shows. Output only, like the tile replacer: its SH-2 hooks write
+    // nothing the machine sees. Copies of a machine share it.
+    std::shared_ptr<SpriteRecorder> sprites;
+    // Character mods' colours (runtime/character_mods.h): the 32X palette
+    // render_line32x shows, with modded characters' entries substituted.
+    // Output only: CRAM itself is never changed. Copies of a machine share it.
+    std::shared_ptr<CharacterPalettes> characters;
+    // Output only: the palette render_line32x last encoded, for the priority
+    // bit in enc32x_pri (-1: none yet), and its encoded entries.
+    uint16_t enc32x_pal[256] = {};
+    uint32_t enc32x[256] = {};
+    int enc32x_pri = -1;
 
     // Components
     Rom rom;
@@ -200,6 +308,11 @@ public:
     Sn76489 psg;
     uint16_t z80_busreq = 0, z80_reset = 0;
     uint32_t z80_bank = 0;
+    // The last PWM notes the 68K wrote to COMM4-7, and how many writes so
+    // far: host-only, for the music player's keyboards (issue #102). Not
+    // saved; the game never reads them.
+    uint8_t pwm_notes[8] = {};
+    uint32_t pwm_note_writes = 0;
     // Audio output: interleaved stereo int16 at kAudioRate, drained by the
     // frontend. Synthesis only runs when audio_enabled (timers always run).
     bool audio_enabled = false;
@@ -219,14 +332,32 @@ public:
     CpuExecutors exec;
     FrameStats stats;
     bool profile = false;
-    int sh2_speed_multiplier = 100;  // 100 = 1.0x (stock), 150 = 1.5x, 200 = 2.0x
-    EdgeBlendMode edge_blend_mode = EdgeBlendMode::None;
 
     // Self-modification tracking for RAM-resident recompiled SH-2 code.
     // Ranges are byte offsets into SDRAM / the cache data array.
     std::vector<std::pair<uint32_t, uint32_t>> sdram_code_ranges, cache_code_ranges;
+    // The same as one bit per byte, made by code_ranges_changed(): a write
+    // checks the bytes it covers instead of every range (issue #62).
+    std::vector<uint8_t> sdram_code_bits, cache_code_bits;
+    void code_ranges_changed();
+    // Moved on when SDRAM may have changed under the recompiled code as a
+    // whole (a state loaded, the machine replaced; also when a count in
+    // sh2_fn_code_writes wraps): every function is checked again.
     uint32_t sdram_code_epoch = 1;
+    // Moved on by a write that changes a byte of cache-resident code.
     uint32_t cache_code_epoch[2] = {1, 1};
+    // Writes over SDRAM code, per recompiled function (issue #62). Each
+    // function's validation ranges in SDRAM ([lo, hi) offsets, `fn` its
+    // number) are its "owners"; a write that changes one of its bytes counts
+    // in sh2_fn_code_writes[fn]. A function only needs checking again, and
+    // running code only needs to hand over to the interpreter, when its own
+    // count moved: writing data next to another routine's code (the special
+    // stage's routines at $06005xxx hold data in a level) used to send every
+    // function to be checked again. The SH-2 buses point at the counts
+    // (sh2::Bus::code_writes) for the generated code.
+    struct CodeOwner { uint32_t lo, hi, fn; };
+    void set_sdram_code_owners(const std::vector<CodeOwner>& owners, size_t functions);
+    std::vector<uint32_t> sh2_fn_code_writes;
 
     // Timing
     uint64_t mclk = 0;        // current master clock
@@ -254,23 +385,32 @@ public:
     void update_sh2_irq(int cpu);
     void remap_m68k();
     void remap_sh2();
-    // Points everything that holds this machine's address back at it. A
-    // machine assigned from another one (a snapshot, a save state) still
-    // refers to that one until this is called.
-    void rebind();
     uint64_t m68k_now_mclk() const;
     uint64_t sh2_now_mclk(int cpu) const;
     int hpos_mclk() const;  // position in current line for 68K observers
+    // For the polling-loop fast-forward (recomp_api.h, issue #62): the lowest
+    // remaining cycle count (sh2[cpu].cycles) down to which a `size`-byte read
+    // of `a` returns, without side effects, what it returns when made at
+    // remaining count `at`, in this CPU's current slice. INT32_MIN when that
+    // holds for the whole slice; `at` itself when it cannot tell.
+    int32_t sh2_read_stable_to(int cpu, uint32_t a, int size, int32_t at) const;
+    SliceInfo& sh2_slice_for_tests(int cpu) { return sh2_slice_[cpu]; }
+    // Renders a 32X line of kNativeWidth + 2 * extra pixels. With wide_src the
+    // margins come from the frame buffer bytes around the line (packed pixel
+    // mode; see patches.h), otherwise they are transparent. With md_top (the
+    // Mega Drive line as Vdp::render_line_indexed gives it, as wide) and its
+    // colours md_rgb, the pixels are written merged with it instead. Public
+    // for tests. With `repeat` (and not wide_src) the margins repeat the
+    // picture's edge every `repeat` pixels instead (issue #135, the menus'
+    // tiled backdrop; patches::menu_margins).
+    void render_line32x(int ln, uint32_t* out, int extra, bool wide_src, const uint8_t* md_top = nullptr,
+                        const uint32_t* md_rgb = nullptr, int repeat = 0);
 
 private:
     void run_slice(uint64_t end_mclk);
     void start_line();
     void end_line();
     void boot_hle_start_sh2();
-    // Renders a 32X line of vdp.width() + 2 * extra pixels. With wide_src the
-    // margins come from the frame buffer bytes around the line (packed pixel
-    // mode; see patches.h), otherwise they are transparent.
-    void render_line32x(int ln, uint32_t* out, int extra, bool wide_src);
     void render_output_line(int src_line, int dst_row);
 
     // 32X register helpers
@@ -284,6 +424,9 @@ private:
     void fifo_push(uint16_t v);
     void fb_write(uint32_t off, uint32_t v, int size, bool overwrite);
     void fb_write_wide(uint8_t* fb, uint32_t off, uint32_t v, int size);
+    void fb_write_special(uint8_t* fb, uint32_t off, uint32_t v, int size, bool overwrite);
+    static bool fb_in_margin(uint32_t off);
+    static bool fb_in_picture(uint32_t off);
     void fb_margin_clear_line(uint32_t line_off, uint16_t fill);
     uint32_t fb_read(uint32_t off, int size);
     uint32_t pad_read(int port);
@@ -304,14 +447,26 @@ public:
     void z80_bus_write(uint16_t a, uint8_t v);
     void set_z80_reset(bool held);
     void set_z80_busreq(bool requested);
-    // Runs the Z80 up to `mclk`, unless it is held in reset or off the bus.
-    void z80_catch_up(uint64_t mclk);
+    // Runs the Z80 (unless it is held in reset or stopped by a bus request)
+    // up to the given master-clock time. Called at the end of every slice
+    // and, before the 68K changes BUSREQ or RESET, at the 68K's current time,
+    // so the Z80 runs exactly until the 68K stops it (or from when it starts
+    // it), as on the hardware.
+    void z80_sync(uint64_t now_mclk);
+    void z80_catch_up();
 private:
 
     // Per-instance bus glue and time-slice bookkeeping (no globals, so several
     // machines can run side by side for lockstep validation).
     Sh2BusCtx sh2_ctx_[2] = {};
     SliceInfo m68k_slice_, sh2_slice_[2];
+
+    // The owners (above) by 256-byte chunk of SDRAM: chunk k's are
+    // code_owners_[code_owner_at_[k] .. code_owner_at_[k + 1]).
+    static constexpr int kCodeChunkShift = 8;
+    std::vector<CodeOwner> code_owners_;
+    std::vector<uint32_t> code_owner_at_;
+    void sdram_code_written(uint32_t off, int size);
 
     friend struct MachineAccess;
 };
