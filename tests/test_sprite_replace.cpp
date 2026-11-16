@@ -190,6 +190,32 @@ TEST(sprite_replace, replaced_pixels_are_drawn_as_the_call_draws_the_original) {
     CHECK_EQ(z.cov[at(98, 50)], 0);
 }
 
+TEST(sprite_replace, an_offset_moves_the_corner_left_and_up) {
+    const std::vector<uint8_t> g = small();
+    // As the same-corner test's image, two columns left and three lines up.
+    SpriteImage big;
+    big.width = 8;
+    big.height = 4;
+    big.dx = -2;
+    big.dy = -3;
+    big.px.assign(32, 5);
+    big.px[0] = 0;
+    big.px[31] = 9;
+    const std::vector<uint8_t> r = replaced(g, big);
+    const SpriteCanvas c = draw(call(100, 50), r);
+    CHECK_EQ(c.cov[at(96, 47)], 0);   // the transparent corner, at x -4, line -3
+    CHECK_EQ(c.px[at(97, 47)], 5);
+    CHECK_EQ(c.px[at(103, 50)], 9);   // x -4 + 7, line 0
+    CHECK_EQ(c.cov[at(104, 50)], 0);
+    CHECK_EQ(coverage(c), 31);
+    // The original's size at another place is a box of its own too.
+    SpriteImage moved = image_of(g);
+    moved.dy = -1;
+    const SpriteCanvas same = draw(call(100, 50), replaced(g, image_of(g)));
+    const SpriteCanvas up = draw(call(100, 51), replaced(g, moved));
+    CHECK(same.px == up.px);
+}
+
 TEST(sprite_replace, another_size_gets_a_box_of_its_own_at_the_same_corner) {
     const std::vector<uint8_t> g = small();
     SpriteImage big;

@@ -93,6 +93,9 @@ struct SpriteList {
 struct SpriteImage {
     int width = 0, height = 0;
     std::vector<uint8_t> px;  // row-major
+    // A replacement's top-left corner from the original box's: negative
+    // where it reaches left of the box or above it.
+    int dx = 0, dy = 0;
 };
 
 // A graphic drawn, for dumping: its name (bank and frame, or the hash), its

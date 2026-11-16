@@ -3,6 +3,7 @@
 // movement table at $88BE58, Espio's cycle sets at $88E7BA and the names at
 // $8F7254. No real ROM is needed.
 #include "runtime/character_mods.h"
+#include "runtime/moves.h"
 #include "runtime/rom.h"
 #include "runtime/stage_select.h"
 #include "test_framework.h"
@@ -139,6 +140,22 @@ TEST(character_mods, ini_files_give_colours_cycle_sets_and_stats) {
     CHECK_EQ(m.stats[1].second, 0x3800u);
     CHECK_EQ(m.stats[2].second, 0x700u);
     CHECK(m.has_palette());
+}
+
+// This fork's [Moves]: the section is the slot's whole set, so the settings'
+// stomp does not reach a character that took Mighty's slot.
+TEST(character_mods, a_moves_section_is_the_slots_whole_set) {
+    std::vector<std::string> messages;
+    const CharacterMod sonic = parsed(0, "[Moves]\ndrop_dash = 1\n", &messages);
+    CHECK(messages.empty());
+    CHECK_EQ(int(sonic.moves), int(moves::kDropDash));
+    CHECK_EQ(int(sonic.moves_given), 0xFF);
+    const uint8_t from_settings = moves::kStomp;
+    CHECK_EQ(int(uint8_t((from_settings & ~sonic.moves_given) | sonic.moves)), int(moves::kDropDash));
+    const CharacterMod plain = parsed(0, "[Palette]\n1 = #FFFFFF\n");
+    CHECK_EQ(int(plain.moves_given), 0);
+    parsed(0, "[Moves]\nhammer = 1\ndrop_dash = 2\n", &messages);
+    CHECK_EQ(int(messages.size()), 2);
 }
 
 TEST(character_mods, lines_it_cannot_use_are_said_and_skipped) {

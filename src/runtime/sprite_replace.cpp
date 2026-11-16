@@ -115,11 +115,13 @@ bool replacement_graphic(const uint8_t* g, uint32_t size, const SpriteImage& img
     if (!g || size < 10) return fail("the original graphic is unreadable");
     if (img.width <= 0 || img.height <= 0 || img.px.size() != size_t(img.width) * size_t(img.height))
         return fail("the image is empty");
-    const int x0 = s16(g), x1 = s16(g + 2), y0 = line_of(s16(g + 4)), y1 = line_of(s16(g + 6));
+    const int gx0 = s16(g), x1 = s16(g + 2), gy0 = line_of(s16(g + 4)), y1 = line_of(s16(g + 6));
     const int w = img.width, h = img.height;
+    // The image's corner: the original box's, moved by the image's offset.
+    const int x0 = gx0 + img.dx, y0 = gy0 + img.dy;
     auto at = [&](int x, int line) { return img.px[size_t((line - y0) * w + (x - x0))]; };
 
-    if (w == x1 - x0 && h == y1 - y0 + 1) {
+    if (!img.dx && !img.dy && w == x1 - x0 && h == y1 - y0 + 1) {
         // The original's own box: its spans, in its order, with the image's
         // pixels; so its stipple columns and its word pairs are the same.
         out.assign(g, g + 8);
@@ -162,12 +164,12 @@ bool replacement_graphic(const uint8_t* g, uint32_t size, const SpriteImage& img
             });
         }
     } else {
-        // Another size: a box of its own at the original's top-left corner.
+        // Another size or place: a box of its own at the image's corner.
         // Columns and lines are bytes in the spans, so the box must stay
         // within -128..127 of the hotspot.
         const int nx1 = x0 + ((w + 1) & ~1), ny1 = y0 + h - 1;
         if (x0 < -128 || nx1 > 127 || y0 < -128 || ny1 > 127)
-            return fail("too large: from its top-left corner it reaches past 127 pixels from the hotspot");
+            return fail("too large: it reaches past 127 pixels from the hotspot");
         put16(out, x0);
         put16(out, nx1);
         put16(out, y0 * 256);

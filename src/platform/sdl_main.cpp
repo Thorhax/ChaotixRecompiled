@@ -1127,7 +1127,15 @@ void apply_tether(App& app) {
 // own frames and never comes this way, so a session plays without them.)
 void apply_moves(App& app) {
     uint8_t sets[8] = {};
-    if (!app.ta.running && app.cfg.move_stomp) sets[0] |= moves::kStomp;  // Mighty is character 0
+    if (!app.ta.running) {
+        if (app.cfg.move_stomp) sets[0] |= moves::kStomp;  // Mighty is character 0
+        // A character file's [Moves] (a character pack's) decides for its slot.
+        for (const CharacterMod& c : app.portrait_mods)
+            if (c.id >= 0 && c.id < 8) sets[c.id] = uint8_t((sets[c.id] & ~c.moves_given) | c.moves);
+    }
+    if (!std::equal(std::begin(sets), std::end(sets), std::begin(app.m->move_sets)))
+        LOGI("moves", "extra moves by character: %02X %02X %02X %02X %02X %02X %02X %02X (1 stomp, 2 drop dash)",
+             sets[0], sets[1], sets[2], sets[3], sets[4], sets[5], sets[6], sets[7]);
     std::copy(std::begin(sets), std::end(sets), std::begin(app.m->move_sets));
 }
 

@@ -1,5 +1,6 @@
 // See character_mods.h, and docs/CHARACTERS.md for the ROM tables used here.
 #include "runtime/character_mods.h"
+#include "runtime/moves.h"
 
 #include <algorithm>
 #include <cctype>
@@ -138,7 +139,7 @@ void parse_character_mod(const std::string& text, CharacterMod& mod, const std::
         if (s.front() == '[') {
             if (s.back() != ']') { say(line, "a section name must end with ]"); continue; }
             section = lower(trim(s.substr(1, s.size() - 2)));
-            if (section != "palette" && section != "cycle" && section != "stats")
+            if (section != "palette" && section != "cycle" && section != "stats" && section != "moves")
                 say(line, "unknown section [" + section + "], its lines are skipped");
             continue;
         }
@@ -190,6 +191,19 @@ void parse_character_mod(const std::string& text, CharacterMod& mod, const std::
                               (f->size == 1 ? "0xFF" : "0xFFFF"));
             } else {
                 mod.stats.emplace_back(f, v);
+            }
+        } else if (section == "moves") {
+            const uint8_t bit = moves::by_name(key.c_str());
+            uint32_t v = 0;
+            if (!bit) {
+                say(line, "unknown move \"" + key + "\"");
+            } else if (!parse_number(value, &v) || v > 1) {
+                say(line, "a move is 1 (on) or 0 (off)");
+            } else {
+                // The section is the slot's whole move set: a move it leaves out is off,
+                // whatever the settings give the slot's own character (Mighty's stomp).
+                mod.moves_given = 0xFF;
+                mod.moves = uint8_t(v ? mod.moves | bit : mod.moves & ~bit);
             }
         } else if (section.empty()) {
             say(line, "outside any section");

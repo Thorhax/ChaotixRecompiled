@@ -216,7 +216,7 @@ TEST(sprite_sheet, only_edited_cells_become_replacements) {
     CHECK(error_of(std::string(kGood) + "frame 02 12 1 10 10 -4 4 -3 0 0123456789ABCDEF\n").empty());
 }
 
-TEST(sprite_sheet, a_cell_grows_right_and_down_and_not_left_or_up) {
+TEST(sprite_sheet, a_cell_grows_on_every_side) {
     const std::vector<uint8_t> rom = test_rom();
     SpriteBank b;
     CHECK(read_rom_bank(rom, 2, b, nullptr));
@@ -234,14 +234,20 @@ TEST(sprite_sheet, a_cell_grows_right_and_down_and_not_left_or_up) {
     CHECK(sheet_replacements(l, px.data(), l.width, l.height, reps, &warnings, &why));
     CHECK_EQ(reps.size(), size_t(2));
     if (reps.size() != 2) return;
+    // Frame 0 reaches up to line 3: its corner moves up five lines.
     CHECK_EQ(reps[0].image.width, 10);
-    CHECK_EQ(reps[0].image.height, 4);
-    CHECK_EQ(reps[0].image.px[size_t(1 * 10 + 9)], 9);
-    CHECK_EQ(reps[0].image.px[size_t(1 * 10 + 8)], 0);  // the room outside the box is transparent
+    CHECK_EQ(reps[0].image.height, 9);
+    CHECK_EQ(reps[0].image.dx, 0);
+    CHECK_EQ(reps[0].image.dy, -5);
+    CHECK_EQ(reps[0].image.px[size_t(2)], 9);               // the pixel above the box
+    CHECK_EQ(reps[0].image.px[size_t(6 * 10 + 9)], 9);
+    CHECK_EQ(reps[0].image.px[size_t(6 * 10 + 8)], 0);  // the room outside the box is transparent
     CHECK_EQ(reps[1].image.width, 6);
     CHECK_EQ(reps[1].image.height, 11);
+    CHECK_EQ(reps[1].image.dx, 0);
+    CHECK_EQ(reps[1].image.dy, 0);
     CHECK_EQ(reps[1].image.px[size_t(10 * 6)], 9);
-    CHECK_EQ(warnings.size(), size_t(1));
+    CHECK(warnings.empty());
     // Grid and room indices inside the box are transparent too.
     px = sheet_pixels(b, l);
     px[size_t(8 * l.width + 1)] = kSheetGrid;

@@ -71,6 +71,7 @@ bool character_portrait(const Rom& rom, int id, const SpritePack* pack, const Ch
         if (g < 0 || g >= int(bank.frames.size()) || bank.frames[size_t(g)].kind != BankFrame::Graphic) continue;
         const BankFrame& f = bank.frames[size_t(g)];
         const SpriteImage* image = &f.image;
+        int ox = 0, oy = 0;
         if (pack) {
             SpriteDraw d;
             d.bank = int16_t(id + (pc.second ? 8 : 0));
@@ -78,10 +79,12 @@ bool character_portrait(const Rom& rom, int id, const SpritePack* pack, const Ch
             if (const SpriteImage* r = pack->find(d); r && r->width > 0 && r->height > 0 &&
                                                       r->px.size() == size_t(r->width) * size_t(r->height)) {
                 image = r;
+                ox = r->dx;
+                oy = r->dy;
                 out.replaced = true;
             }
         }
-        placed.push_back({image, pc.dx + f.x0, pc.dy + f.y0});
+        placed.push_back({image, pc.dx + f.x0 + ox, pc.dy + f.y0 + oy});
         if (&pc == &pieces.front()) {
             out.bank = id;
             out.frame = pc.frame;

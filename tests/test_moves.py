@@ -28,10 +28,10 @@ def s32(v):
 
 
 def run(*extra):
-    """Per frame: (state, x velocity, y velocity) of the player's object."""
+    """Per frame: (state, x velocity, y velocity, ground speed) of the player's object."""
     out = subprocess.run(
         [HEADLESS, "--rom", ROM, "--frames", "960", "--stage", "300:0:1:0:0:7:0",
-         "--peek-every", "1:%04X:32" % PLAYER, *extra],
+         "--peek-every", "1:%04X:48" % PLAYER, *extra],
         capture_output=True, text=True, check=True).stdout
     frames = {}
     for line in out.splitlines():
@@ -39,7 +39,8 @@ def run(*extra):
         if len(p) == 4 and p[0] == "peek":
             b = bytes.fromhex(p[3])
             frames[int(p[1])] = (b[7], s32(int.from_bytes(b[0x18:0x1C], "big")),
-                                 s32(int.from_bytes(b[0x1C:0x20], "big")))
+                                 s32(int.from_bytes(b[0x1C:0x20], "big")),
+                                 int.from_bytes(b[0x2C:0x2E], "big", signed=True))
     return frames
 
 
@@ -73,6 +74,23 @@ check(all(off[f] == plain[f] for f in range(840, 960)), "without the move the se
 
 held = run("--moves", "0:1", "--press", "850:c:12", "--press", "864:right:8", "--press", "866:c+right:3")
 check(all(held[f][2] < STOMP_SPEED for f in range(866, 880)), "left or right held: no stomp")
+
+# The drop dash: jump, let go, hold jump again until landing.
+DASH_SPEED = 0x0800  # ground speed, 8.8
+dash = run("--moves", "0:2", *JUMP, "--press", "866:c:80")
+dash_landing = next(f for f in sorted(dash) if f > 866 and dash[f][0] in (0x02, 0x06))
+after = dash[dash_landing + 2]
+check(after[0] == 0x06 and DASH_SPEED - 0x40 <= after[3] <= DASH_SPEED,
+      "drop dash: lands rolling at the dash's speed (state %02X, ground speed %#x)" % (after[0], after[3]))
+check(all(dash[f] == plain[f] for f in range(840, dash_landing - 1)), "and the jump itself is unchanged")
+short = run("--moves", "0:2", *JUMP, "--press", "866:c:10")
+check(all(short[f] == plain[f] for f in range(840, 960)), "let go before landing: no dash")
+late = run("--moves", "0:2", "--press", "850:c:80")
+check(all(late[f][3] == 0 for f in range(850, 940)), "jump held all the way from the ground: no dash")
+left = run("--moves", "0:2", *JUMP, "--press", "866:c:80", "--press", "880:left:60")
+left_landing = next(f for f in sorted(left) if f > 866 and left[f][0] in (0x02, 0x06))
+check(left[left_landing + 2][0] == 0x06 and left[left_landing + 2][3] <= -(DASH_SPEED - 0x100),
+      "left held: the dash goes left (ground speed %d)" % left[left_landing + 2][3])
 
 knuckles = subprocess.run(
     [HEADLESS, "--rom", ROM, "--frames", "900", "--stage", "300:0:1:0:2:7:0", "--moves", "0:1",

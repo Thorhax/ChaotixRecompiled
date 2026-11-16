@@ -964,6 +964,8 @@ int main(int argc, char** argv) {
     if (!character_dirs.empty()) {
         std::vector<std::string> messages;
         character_mods = load_character_mods(character_dirs, &messages);
+        for (const CharacterMod& c : character_mods)
+            if (c.id >= 0 && c.id < 8) move_sets[c.id] = uint8_t((move_sets[c.id] & ~c.moves_given) | c.moves);
         const int changed = m->rom.apply_edits(stat_edits(m->rom, character_mods, &messages), &messages);
         for (const auto& msg : messages) std::printf("characters: %s\n", msg.c_str());
         character_palettes = std::make_shared<CharacterPalettes>(m->rom, character_mods);

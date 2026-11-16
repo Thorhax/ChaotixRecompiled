@@ -996,6 +996,11 @@ if(CHAOTIX_ROM AND EXISTS "${CHAOTIX_ROM}")
                 --moves 0:1 --fuzz 7:700:5000 --lockstep)
     set_tests_properties(moves_stomp_lockstep PROPERTIES
         PASS_REGULAR_EXPRESSION "lockstep: 5000 frames bit-identical")
+    add_test(NAME moves_drop_dash_lockstep
+        COMMAND chaotix_headless --rom "${CHAOTIX_ROM}" --frames 5000 --stage 300:0:1:0:0:7:0
+                --moves 0:2 --fuzz 11:700:5000 --lockstep)
+    set_tests_properties(moves_drop_dash_lockstep PROPERTIES
+        PASS_REGULAR_EXPRESSION "lockstep: 5000 frames bit-identical")
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_FOUND)
         add_test(NAME moves_stomp

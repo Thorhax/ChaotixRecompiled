@@ -435,6 +435,7 @@ bool parse_sheet_sidecar(const std::string& text, SheetLayout& out, std::string*
 bool sheet_replacements(const SheetLayout& l, const uint8_t* px, int width, int height, std::vector<SheetReplacement>& out,
                         std::vector<std::string>* warnings, std::string* why) {
     out.clear();
+    (void)warnings;  // none now: a cell grows on every side
     if (width != l.width || height != l.height) {
         if (why) *why = "the image is " + std::to_string(width) + "x" + std::to_string(height) + ", its description says " +
                         std::to_string(l.width) + "x" + std::to_string(l.height);
@@ -450,27 +451,34 @@ bool sheet_replacements(const SheetLayout& l, const uint8_t* px, int width, int 
         // the game rewrites it while the scene runs.
         if (c.hashed && cell_hash(c, px, width) == c.hash) continue;
         const int bx = c.x + l.hot_x + c.x0, by = c.y + l.hot_y + c.y0;
-        int w = c.x1 - c.x0, h = c.y1 - c.y0 + 1;
-        // Pixels painted right of or below the box, within the cell, make
-        // the replacement larger from the same top-left corner.
-        bool outside = false;
+        // Pixels painted outside the box, within the cell, make the
+        // replacement larger on that side: right and down from the same
+        // top-left corner, left and up by moving the corner (dx, dy).
+        int left = bx, top = by, right = bx + (c.x1 - c.x0), bottom = by + (c.y1 - c.y0 + 1);
         for (int y = c.y; y < c.y + c.h; ++y)
             for (int x = c.x; x < c.x + c.w; ++x) {
                 if (!value(x, y)) continue;
-                if (x < bx || y < by) { outside = true; continue; }
-                w = std::max(w, x - bx + 1);
-                h = std::max(h, y - by + 1);
+                left = std::min(left, x);
+                top = std::min(top, y);
+                right = std::max(right, x + 1);
+                bottom = std::max(bottom, y + 1);
             }
-        if (outside && warnings)
-            warnings->push_back("frame " + hex2(c.frame) + ": pixels left of or above its box are left out "
-                                "(a replacement grows only to the right and down)");
+        // The spans start at even columns from the corner as the game's do.
+        if ((c.x0 + left - bx) & 1) --left;
+        const int w = right - left, h = bottom - top;
         SheetReplacement r;
         r.frame = c.frame;
         r.image.width = w;
         r.image.height = h;
+        r.image.dx = left - bx;
+        r.image.dy = top - by;
         r.image.px.resize(size_t(w) * size_t(h));
         for (int y = 0; y < h; ++y)
-            for (int x = 0; x < w; ++x) r.image.px[size_t(y * w + x)] = value(bx + x, by + y);
+            for (int x = 0; x < w; ++x) {
+                const int sx = left + x, sy = top + y;
+                // The even column added may lie in the grid or the next cell.
+                r.image.px[size_t(y * w + x)] = sx >= c.x && sx < c.x + c.w ? value(sx, sy) : uint8_t(0);
+            }
         out.push_back(std::move(r));
     }
     return true;

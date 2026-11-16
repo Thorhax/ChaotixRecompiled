@@ -24,6 +24,14 @@
 // record at FFE04C (player) or FFE05C (partner): +2 held, +3 pressed that
 // frame, $20 jump (C); the record is as the code will read it when the hook
 // runs.
+//
+// DROP DASH (Sonic's, from Sonic Mania and Sonic 3 A.I.R.): in a jump, letting
+// go of jump and holding it again charges a dash; held for a third of a
+// second and still held on landing, the character leaves the ground rolling
+// at 8 px a frame (more if it was already moving that way, up to 12), the way
+// it faces or the way left or right is held. Letting go before landing drops
+// the charge. Ground speed is the object's word +$2C (8.8 px a frame) and
+// bit 3 of byte +$25 is set while it faces left (docs/RING_TETHER.md).
 #pragma once
 #include <cstdint>
 
@@ -36,12 +44,21 @@ namespace moves {
 // Bits of Machine::move_sets[character].
 enum : uint8_t {
     kStomp = 0x01,
+    kDropDash = 0x02,
 };
+// A move by the name a character file's [Moves] section gives it; 0 if none.
+uint8_t by_name(const char* name);
 
 // Bits of Machine::move_state[who] (0 the player, 1 the partner).
 enum : uint8_t {
     kStomping = 0x01,
+    kDashReleased = 0x02,  // jump was let go of since the jump began
+    kDashCount = 0xFC,     // frames jump has been held again, x 4
 };
+
+// Drop dash: frames of holding before it is charged, and its speeds (8.8).
+inline constexpr int kDropDashCharge = 20;
+inline constexpr int kDropDashSpeed = 0x0800, kDropDashMax = 0x0C00;
 
 // The stomp's first speed, 16.16 px a frame ($999 in 8.8, the mod's value).
 inline constexpr int32_t kStompSpeed = 0x00099900;
