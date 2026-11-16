@@ -15,6 +15,11 @@ generated/*
 build*/
 out/
 analysis_out/
+# Nintendo Switch packages (platforms/switch)
+dist/
+*.nro
+*.elf
+*.nacp
 
 # Runtime output
 *.png
