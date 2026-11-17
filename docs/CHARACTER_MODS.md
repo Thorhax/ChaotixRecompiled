@@ -10,6 +10,9 @@ to three sections:
 - `[Stats]`: how the character moves: acceleration, top speed, gravity,
   jump, and more.
 
+This fork adds `[Character]` (a name for the menus) and `[Moves]` (extra
+moves), both described below.
+
 New sprites, the other half of a new character, are PNG files in
 `Mods/Textures` ([TEXTURE_MODS.md](TEXTURE_MODS.md)); the two combine (see
 the end). Where all of this lives in the ROM, and how it was found, is in
@@ -181,6 +184,32 @@ The character names in OPTIONS' TIME ATTACK come from the ROM's own stage
 select table (`$8F7254`), so a ROM patch that renames a character shows its
 new name there. The unused slot is offered once a patch gives it a name
 other than the game's `**********`.
+
+A character file can name its slot as well (this fork):
+
+```ini
+[Character]
+name = ROBO MIGHTY
+```
+
+1 to 12 letters, digits, spaces, `.`, `-` or `'`, shown in capitals. While
+the file is in use, LEVEL SELECT and TIME ATTACK show this name for the slot.
+
+## Extra moves: `[Moves]` (this fork)
+
+Two moves the game never had can be given to a slot:
+
+```ini
+[Moves]
+stomp = 1       ; jump again in the air to drop straight down
+drop_dash = 1   ; in a jump, hold jump again; landing starts a roll
+```
+
+A file with a `[Moves]` section sets its slot's whole set: a move it does
+not list is off for that slot, whatever OPTIONS > MIGHTY STOMP says. Without
+the section, Mighty's stomp follows that option and no other slot has a move.
+As with the option, the moves are not used in TIME ATTACK or netplay and no
+awards are earned while one is on.
 
 ## A new character: combining with sprite replacement
 
