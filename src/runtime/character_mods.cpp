@@ -139,7 +139,7 @@ void parse_character_mod(const std::string& text, CharacterMod& mod, const std::
         if (s.front() == '[') {
             if (s.back() != ']') { say(line, "a section name must end with ]"); continue; }
             section = lower(trim(s.substr(1, s.size() - 2)));
-            if (section != "palette" && section != "cycle" && section != "stats" && section != "moves")
+            if (section != "palette" && section != "cycle" && section != "stats" && section != "moves" && section != "character")
                 say(line, "unknown section [" + section + "], its lines are skipped");
             continue;
         }
@@ -191,6 +191,21 @@ void parse_character_mod(const std::string& text, CharacterMod& mod, const std::
                               (f->size == 1 ? "0xFF" : "0xFFFF"));
             } else {
                 mod.stats.emplace_back(f, v);
+            }
+        } else if (section == "character") {
+            if (key != "name") {
+                say(line, "unknown key \"" + key + "\"");
+            } else {
+                // The menus' font: capitals, digits and a few signs.
+                std::string name;
+                bool ok = !value.empty() && value.size() <= 12;
+                for (char ch : value) {
+                    if (ch >= 'a' && ch <= 'z') ch = char(ch - 'a' + 'A');
+                    if (!((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == ' ' || ch == '.' || ch == '-' || ch == '\'')) ok = false;
+                    name.push_back(ch);
+                }
+                if (ok) mod.name = name;
+                else say(line, "a name is 1 to 12 letters, digits, spaces, . - or '");
             }
         } else if (section == "moves") {
             const uint8_t bit = moves::by_name(key.c_str());

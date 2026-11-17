@@ -78,6 +78,9 @@ struct CharacterMod {
     // on (`moves`). A file with the section decides every move of its slot
     // (`moves_given` is then 0xFF): the settings' own no longer apply there.
     uint8_t moves = 0, moves_given = 0;
+    // [Character] name (this fork): what the menus call the slot while the
+    // file is in use, for a pack that puts another character there.
+    std::string name;
 
     bool has_palette() const;
 };

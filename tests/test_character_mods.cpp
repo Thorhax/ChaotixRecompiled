@@ -158,6 +158,15 @@ TEST(character_mods, a_moves_section_is_the_slots_whole_set) {
     CHECK_EQ(int(messages.size()), 2);
 }
 
+TEST(character_mods, a_character_section_names_the_slot) {
+    std::vector<std::string> messages;
+    CHECK(parsed(0, "[Character]\nname = Sonic\n", &messages).name == "SONIC");
+    CHECK(messages.empty());
+    CHECK(parsed(0, "[Character]\nname = A name far too long\n", &messages).name.empty());
+    CHECK(parsed(0, "[Character]\nname = <b>\ncolour = 1\n", &messages).name.empty());
+    CHECK_EQ(int(messages.size()), 3);
+}
+
 TEST(character_mods, lines_it_cannot_use_are_said_and_skipped) {
     std::vector<std::string> messages;
     const CharacterMod m = parsed(kKnuckles,

@@ -2024,6 +2024,15 @@ SDL_Texture* character_sprite(App& app, int who, float* w, float* h) {
     return it->second.texture;
 }
 
+// The menus' character names: the game's own, and a character file's
+// [Character] name for its slot (a pack that puts someone else there).
+void set_character_names(App& app) {
+    std::vector<std::string> names = stage_select::character_names(app.m->rom);
+    for (const CharacterMod& c : app.portrait_mods)
+        if (c.id >= 0 && size_t(c.id) < names.size() && !c.name.empty()) names[size_t(c.id)] = c.name;
+    app.menu.set_character_names(std::move(names));
+}
+
 // Character mods (docs/CHARACTER_MODS.md): Mods/Characters/<name>.ini, read
 // both for their colours (load_mods) and their stats (apply_rom_patches).
 std::vector<CharacterMod> read_character_mods(App& app) {
@@ -2101,6 +2110,7 @@ void load_mods(App& app, bool force = false) {
     // The characters' colours, from the ROM as it runs (patched or not).
     app.portrait_mods = read_character_mods(app);
     drop_portraits(app);
+    set_character_names(app);
     auto palettes = std::make_shared<CharacterPalettes>(app.m->rom, app.portrait_mods);
     app.character_palettes = palettes->empty() ? nullptr : palettes;
     app.m->characters = app.character_palettes;
@@ -2852,7 +2862,7 @@ int main(int argc, char** argv) {
     warn_about_dead_bindings(app);
     if (!app.autotest_frames || !app.mods_dir.empty()) apply_rom_patches(app);  // autotests are hermetic unless asked
     // TIME ATTACK offers the characters by the names the ROM gives them.
-    app.menu.set_character_names(stage_select::character_names(app.m->rom));
+    set_character_names(app);
     // The music player's songs, as the game's SOUND TEST names them.
     app.menu.set_music_tracks(jukebox::track_list(app.m->rom));
     if (app.menu.page_name() == "music") app.menu.show_page("music");  // --menu music opened it before
