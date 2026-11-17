@@ -206,7 +206,7 @@ drop_dash = 1   ; in a jump, hold jump again; landing starts a roll
 ```
 
 A file with a `[Moves]` section sets its slot's whole set: a move it does
-not list is off for that slot, whatever OPTIONS > MIGHTY STOMP says. Without
+not list is off for that slot, whatever the MIGHTY STOMP option (OPTIONS > GAMEPLAY) says. Without
 the section, Mighty's stomp follows that option and no other slot has a move.
 As with the option, the moves are not used in TIME ATTACK or netplay and no
 awards are earned while one is on.
