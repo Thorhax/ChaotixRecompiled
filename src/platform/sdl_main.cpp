@@ -1126,7 +1126,7 @@ void apply_tether(App& app) {
 
 // This fork's extra moves (runtime/moves.h), set before each frame like the
 // tether options, and like them off for TIME ATTACK runs. (Netplay runs its
-// own frames and never comes this way, so a session plays without them.)
+// own frames and never comes this way: the main loop clears them there.)
 void apply_moves(App& app) {
     uint8_t sets[8] = {};
     if (!app.ta.running) {
@@ -3208,6 +3208,8 @@ int main(int argc, char** argv) {
             // game, its ticks run the frames (the local pad is this player's,
             // player 1 or 2 by role).
             const bool owned = netplay_owns(app);
+            // No extra moves in a session: both sides must run the same game.
+            std::fill(std::begin(app.m->move_sets), std::end(app.m->move_sets), uint8_t(0));
             const int ran = netplay_pass(app, buttons, owned ? std::max(plan.frames, 1) : 0);
             if (owned) {
                 steps = ran;
