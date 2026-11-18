@@ -164,6 +164,19 @@ std::vector<Pack> discover(const std::string& root_in, const std::string& game_v
             continue;
         }
         if (p.info.name.empty()) p.info.name = name;
+        if (const fs::path chars = find_kind(it->path(), "Characters"); !chars.empty()) {
+            static const char* const kNames[] = {"MIGHTY", "KNUCKLES", "CHARMY", "VECTOR", "BOMB", "HEAVY", "ESPIO"};
+            std::vector<std::string> found;
+            std::error_code e3;
+            for (fs::directory_iterator c(chars, e3), cend; !e3 && c != cend; c.increment(e3)) {
+                std::string ext = c->path().extension().u8string(), stem = c->path().stem().u8string();
+                for (char& ch : ext) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+                for (char& ch : stem) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+                if (ext == ".ini") found.push_back(stem);
+            }
+            for (const char* n : kNames)
+                if (std::find(found.begin(), found.end(), n) != found.end()) p.replaces.push_back(n);
+        }
         p.too_new = !p.info.min_version.empty() && compare_versions(p.info.min_version, game_version) > 0;
         if (p.too_new && messages)
             messages->push_back(name + ": made for version " + p.info.min_version + " or later (this is " +

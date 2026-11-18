@@ -1496,7 +1496,15 @@ void Menu::build_mods() {
     if (std::vector<mod_packs::Pack>* list = packs()) {
         for (size_t i = 0; i < list->size(); ++i) {
             const mod_packs::Pack& p = (*list)[i];
-            Item it{upper(p.title()),
+            // This fork: a pack that changes characters says which, so that
+            // two for the same one are not left on together.
+            std::string label = upper(p.title());
+            if (!p.loose && !p.replaces.empty()) {
+                label += " (";
+                for (size_t k = 0; k < p.replaces.size(); ++k) label += (k ? ", " : "") + p.replaces[k];
+                label += ")";
+            }
+            Item it{label,
                     [this, i] {
                         const std::vector<mod_packs::Pack>* l = packs();
                         return l && i < l->size() && (*l)[i].enabled ? std::string("ON") : std::string("OFF");

@@ -57,6 +57,10 @@ struct Pack {
     bool textures = false, characters = false, music = false, patches = false, touch = false, samples = false;
     // mod.ini's `requires` names a newer version than this one.
     bool too_new = false;
+    // This fork: the characters it has a file for in Characters ("MIGHTY"),
+    // in the game's order. Two packs that change the same character should
+    // not both be on, and the MODS page says which each one changes.
+    std::vector<std::string> replaces;
 
     bool has(const char* kind) const;
     // Patches and character stats change the game itself, so they are only
