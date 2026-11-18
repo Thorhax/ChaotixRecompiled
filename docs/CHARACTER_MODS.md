@@ -10,8 +10,8 @@ to three sections:
 - `[Stats]`: how the character moves: acceleration, top speed, gravity,
   jump, and more.
 
-This fork adds `[Character]` (a name for the menus) and `[Moves]` (extra
-moves), both described below.
+This fork adds `[Character]` (a name for the menus), `[SpecialStage]` (the
+special stage's colours) and `[Moves]` (extra moves), described below.
 
 New sprites, the other half of a new character, are PNG files in
 `Mods/Textures` ([TEXTURE_MODS.md](TEXTURE_MODS.md)); the two combine (see
@@ -195,6 +195,29 @@ name = ROBO MIGHTY
 1 to 12 letters, digits, spaces, `.`, `-` or `'`, shown in capitals. While
 the file is in use, LEVEL SELECT and TIME ATTACK show this name for the slot.
 
+The game's own PLAYER SELECT screen writes a longer name from the ROM: seven
+records of 32 bytes from ROM `0x32678` (Knuckles, Mighty, Espio, Charmy,
+Vector, Bomb, Heavy), each a word (minus four times the name's length, which
+centres it) and 30 characters padded with spaces. A pack renames a character
+there with a ROM patch in its `Patches` folder ([ROM_PATCHES.md](ROM_PATCHES.md)).
+
+## The special stage: `[SpecialStage]` (this fork)
+
+In the special stage the player's character has other sprites (a bank of its
+own: Mighty 42, Knuckles 27, Charmy 46, replaced like any other,
+[TEXTURE_MODS.md](TEXTURE_MODS.md)) and other colours, 18 again:
+
+```ini
+[SpecialStage]
+1 = #F0F0F0
+10 = #0068F0
+```
+
+The keys are pixel values 1 to 18 as in `[Palette]`. The stage shows them in
+palette entries 0x6E to 0x7F, and the game adds 0x6D to the player's bank in
+memory: a replacement sprite for that bank is drawn as it is, so its pixels
+are 0x6E to 0x7F (value + 0x6D).
+
 ## Extra moves: `[Moves]` (this fork)
 
 Two moves the game never had can be given to a slot:
@@ -203,6 +226,20 @@ Two moves the game never had can be given to a slot:
 [Moves]
 stomp = 1       ; jump again in the air to drop straight down
 drop_dash = 1   ; in a jump, hold jump again; landing starts a roll
+ray_glide = 1   ; jump again in the air to glide: forward dives, back pulls up
+```
+
+`ray_glide` is Ray's glide from Sonic Mania Plus and stands alone (a slot
+with it has neither of the other two). It runs in Knuckles' glide state, so
+it is for Knuckles' slot, and the same file's `[Stats]` must get that
+state's own speeds out of the way and stop the game starting its own glide:
+
+```ini
+[Stats]
+abilities_a = 0x8F        ; Knuckles' 0xCF without bit 6, the game's glide
+glide_speed = 0x7FFF
+glide_acceleration = 0
+glide_fall_speed = 1
 ```
 
 A file with a `[Moves]` section sets its slot's whole set: a move it does
@@ -302,10 +339,12 @@ the player's ground speed in Botanic Base is at `AD74`).
 ## Limits
 
 - Only scenes where the characters use the palette blocks above are
-  recoloured; levels and the lobby were checked. The bonus and special
-  stages were not looked at for this. The PLAYER SELECT screen, the results screen, the title's
-  characters and the life icons were not mapped and keep the game's colours
-  (the colour check leaves anything it does not recognise alone).
+  recoloured; levels and the lobby were checked. This fork adds PLAYER
+  SELECT (every bank has a block of its own there, at its own colour offset)
+  and the special stage (`[SpecialStage]`). The bonus stage was not looked
+  at. The results screen, the title's characters and the life icons were not
+  mapped and keep the game's colours (the colour check leaves anything it
+  does not recognise alone).
 - A fade other than the game's two uniform ones (none was seen) shows the
   game's colours while it lasts.
 - Stats need a restart; the abilities bytes can give a character a move it
