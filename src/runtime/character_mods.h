@@ -78,6 +78,10 @@ struct CharacterMod {
     // on (`moves`). A file with the section decides every move of its slot
     // (`moves_given` is then 0xFF): the settings' own no longer apply there.
     uint8_t moves = 0, moves_given = 0;
+    // [SpecialStage] (this fork): colours for pixel values 1..18 of the
+    // character's special stage sprites, which have a palette of their own.
+    std::array<uint16_t, characters::kColours> special{};
+    std::array<bool, characters::kColours> special_set{};
     // [Character] name (this fork): what the menus call the slot while the
     // file is in use, for a pack that puts another character there.
     std::string name;
@@ -116,7 +120,7 @@ public:
     CharacterPalettes(const Rom& rom, const std::vector<CharacterMod>& mods);
 
     // Whether any mod has colours; without, there is nothing to do.
-    bool empty() const { return chars_.empty(); }
+    bool empty() const { return chars_.empty() && special_.empty(); }
 
     // The palette to show: `cram` itself, or a substituted copy. `offsets` is
     // the 16 colour offset bytes at SDRAM 0x06004B00 (one per bank).
@@ -135,6 +139,8 @@ public:
     // the partner's at 0x25.
     static constexpr uint8_t kPlayerOffset = 0x12;
     static constexpr uint8_t kPartnerOffset = 0x24;
+    // The special stage's player: entries 0x6E to 0x7F, whoever it is.
+    static constexpr uint8_t kSpecialOffset = 0x6D;
     static constexpr uint32_t kOffsetBytes = 0x4B00;  // in SDRAM
 
 private:
@@ -150,6 +156,7 @@ private:
     bool substitute(const Char& c, int base);
 
     std::vector<Char> chars_;
+    std::vector<Char> special_;  // the special stage's colours of the characters that change them
     uint16_t key_pal_[256] = {};
     uint8_t key_offsets_[16] = {};
     bool valid_ = false;

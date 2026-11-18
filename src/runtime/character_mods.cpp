@@ -75,7 +75,8 @@ using namespace characters;
 
 bool CharacterMod::has_palette() const {
     return std::any_of(palette_set.begin(), palette_set.end(), [](bool b) { return b; }) ||
-           std::any_of(cycle_set.begin(), cycle_set.end(), [](bool b) { return b; });
+           std::any_of(cycle_set.begin(), cycle_set.end(), [](bool b) { return b; }) ||
+           std::any_of(special_set.begin(), special_set.end(), [](bool b) { return b; });
 }
 
 namespace {
@@ -139,7 +140,7 @@ void parse_character_mod(const std::string& text, CharacterMod& mod, const std::
         if (s.front() == '[') {
             if (s.back() != ']') { say(line, "a section name must end with ]"); continue; }
             section = lower(trim(s.substr(1, s.size() - 2)));
-            if (section != "palette" && section != "cycle" && section != "stats" && section != "moves" && section != "character")
+            if (section != "palette" && section != "cycle" && section != "stats" && section != "moves" && section != "character" && section != "specialstage")
                 say(line, "unknown section [" + section + "], its lines are skipped");
             continue;
         }
@@ -147,16 +148,19 @@ void parse_character_mod(const std::string& text, CharacterMod& mod, const std::
         if (eq == std::string::npos) { say(line, "not a key = value line"); continue; }
         const std::string key = lower(trim(s.substr(0, eq)));
         const std::string value = trim(s.substr(eq + 1));
-        if (section == "palette") {
+        if (section == "palette" || section == "specialstage") {
             uint32_t pixel = 0;
             uint16_t c = 0;
             if (!parse_number(key, &pixel) || pixel < 1 || pixel > uint32_t(kColours)) {
                 say(line, "palette keys are the pixel values 1 to 18");
             } else if (!parse_colour(value, &c)) {
                 say(line, "not a colour (#RRGGBB, or a 32X colour 0x0000-0x7FFF)");
-            } else {
+            } else if (section == "palette") {
                 mod.palette[pixel - 1] = c;
                 mod.palette_set[pixel - 1] = true;
+            } else {
+                mod.special[pixel - 1] = c;
+                mod.special_set[pixel - 1] = true;
             }
         } else if (section == "cycle") {
             uint32_t set = 0;
@@ -277,6 +281,11 @@ constexpr uint32_t kStatTable = 0x00BE58;
 // Espio's cycle sets ($88E7BA, read by $88E70A).
 constexpr uint32_t kEspioCycle = 0x00E7BA;
 
+// The special stage's colours of each character (18 words, loaded to entries
+// 0x6E-0x7F; the blocks overlap as the level ones do). No table of pointers
+// was found: the code picks them, so these are the ROM's own offsets.
+constexpr uint32_t kSpecialColours[kCount] = {0x7F7C4, 0x7F7C4, 0x7F7E2, 0x7F806, 0x7F82A, 0x7F84C, 0x7F868, 0x7F88C};
+
 bool in_rom(const Rom& rom, uint32_t off, uint32_t n) { return off < rom.file_size && n <= rom.file_size - off; }
 
 // The ROM offset of a character's colours: the pointer is into the banked
@@ -322,6 +331,18 @@ std::vector<RomEdit> stat_edits(const Rom& rom, const std::vector<CharacterMod>&
 CharacterPalettes::CharacterPalettes(const Rom& rom, const std::vector<CharacterMod>& mods) {
     for (const CharacterMod& m : mods) {
         if (m.id < 0 || m.id >= kCount || !m.has_palette()) continue;
+        if (std::any_of(m.special_set.begin(), m.special_set.end(), [](bool b) { return b; }) &&
+            in_rom(rom, kSpecialColours[m.id], 2 * kColours)) {
+            Char c;
+            c.id = m.id;
+            for (int i = 0; i < kColours; ++i) {
+                c.rom[i] = rom.read16(kSpecialColours[m.id] + 2 * uint32_t(i)) & 0x7FFF;
+                c.mod[i] = m.special_set[size_t(i)] ? m.special[size_t(i)] : c.rom[i];
+            }
+            special_.push_back(c);
+        }
+        if (std::none_of(m.palette_set.begin(), m.palette_set.end(), [](bool b) { return b; }) &&
+            std::none_of(m.cycle_set.begin(), m.cycle_set.end(), [](bool b) { return b; })) continue;
         const uint32_t off = colour_offset(rom, m.id);
         if (!off) continue;
         Char c;
@@ -452,6 +473,19 @@ const uint16_t* CharacterPalettes::display(const uint16_t* cram, const uint8_t* 
         }
         if (claimed && !done) ++refused_;
     }
+    // Scenes that show more characters than two (PLAYER SELECT has all seven)
+    // give each bank a block of its own: a character's colours at its own
+    // offset (Mighty's is 0 there) are its colours there too. The colour check
+    // keeps this safe: a block that is not the character's is left alone.
+    for (const Char& c : chars_) {
+        const int base = offsets[c.id];
+        if (base == kPlayerOffset || base == kPartnerOffset || base + kColours >= 0x80) continue;
+        if (substitute(c, base)) ++substituted_;
+    }
+    // The special stage: whoever plays it, its colours are in one block, and
+    // they are its own there (not the level's), so the first match is it.
+    for (const Char& c : special_)
+        if (substitute(c, kSpecialOffset)) { ++substituted_; break; }
     changed_ = std::memcmp(out_, cram, sizeof out_) != 0;
     return changed_ ? out_ : cram;
 }

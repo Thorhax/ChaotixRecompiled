@@ -348,6 +348,10 @@ Known limits:
   and up when the game flips the draw). It must stay within 127 pixels of
   the draw's position (the game's graphic format stores columns and lines as
   bytes); a larger one is not drawn (the original is, and the log says why).
+  This fork: a text file beside the image, named as the image with `.offset`
+  added (`32x_02_51.png.offset`), holding two numbers `DX DY`, moves the
+  image's corner from the original's, so a larger image can grow to the left
+  and up as well (a sheet's cell already can).
   Being drawn at the game's resolution, a replacement can be more detailed
   only within that resolution: high-resolution replacements would need the
   compositor to output more than 320 pixels, which is not done.

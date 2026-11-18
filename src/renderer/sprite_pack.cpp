@@ -78,6 +78,19 @@ int load_sprite_pack(SpritePack& pack, const std::string& dir, std::vector<std::
         s.width = img.width;
         s.height = img.height;
         s.px = img.indices;
+        // This fork: "<name>.png.offset" beside the image holds "DX DY", the
+        // image's corner from the original's (so a larger image can grow to
+        // the left and up as a sheet's cell can).
+        if (std::FILE* f = std::fopen((e.path().u8string() + ".offset").c_str(), "r")) {
+            int dx = 0, dy = 0;
+            if (std::fscanf(f, "%d %d", &dx, &dy) == 2 && dx >= -127 && dx <= 127 && dy >= -127 && dy <= 127) {
+                s.dx = dx;
+                s.dy = dy;
+            } else {
+                say(name + ".offset: not two numbers from -127 to 127; ignored");
+            }
+            std::fclose(f);
+        }
         if (slot) pack.add(int(bank), int(frame), std::move(s));
         else pack.add(hash, std::move(s));
     }

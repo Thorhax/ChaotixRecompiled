@@ -320,6 +320,62 @@ TEST(character_mods, the_palette_shown_has_the_characters_colours) {
     CHECK_EQ(shown[0xA5], 0x0123);
 }
 
+TEST(character_mods, a_block_at_the_characters_own_offset_is_recoloured_too) {
+    // PLAYER SELECT shows every character, each bank with a block of its own
+    // (Mighty's at 0): none of them is the player's or the partner's block.
+    const Rom rom = synthetic_rom();
+    std::vector<CharacterMod> mods = {parsed(0, "[Palette]\n1 = 0x0001\n"), parsed(kKnuckles, "[Palette]\n2 = 0x0002\n")};
+    CharacterPalettes pal(rom, mods);
+    uint16_t cram[256] = {};
+    uint8_t offsets[16] = {};
+    load_block(cram, 0, 0x00, false);
+    load_block(cram, kKnuckles, 0x48, false);
+    offsets[0] = 0x00;
+    offsets[kKnuckles] = 0x48;
+    const uint16_t* shown = pal.display(cram, offsets);
+    CHECK_EQ(pal.substituted(), 2);
+    CHECK_EQ(shown[0x01], 0x0001);
+    CHECK_EQ(shown[0x4A], 0x0002);
+    // Other colours there (a level's common set at entries 1 up): as they are.
+    cram[0x02] = 0x7FFF;
+    shown = pal.display(cram, offsets);
+    CHECK_EQ(shown[0x01], cram[0x01]);
+    CHECK_EQ(shown[0x4A], 0x0002);
+}
+
+TEST(character_mods, the_special_stage_has_colours_of_its_own) {
+    // [SpecialStage]: the 18 colours the stage loads for its player (ROM
+    // 0x7F7E2 for Knuckles), shown in entries 0x6E to 0x7F.
+    std::vector<uint8_t> v = synthetic_rom_bytes();
+    for (int i = 0; i < 18; ++i) put16(v, 0x7F7E2 + 2 * uint32_t(i), uint16_t(0x0842 + 0x21 * i));
+    Rom rom;
+    std::string err;
+    CHECK(rom.load_memory(v.data(), v.size(), &err));
+    std::vector<std::string> messages;
+    std::vector<CharacterMod> mods = {parsed(kKnuckles, "[SpecialStage]\n1 = 0x0011\n18 = 0x0012\n19 = 0x0013\n", &messages)};
+    CHECK_EQ(int(messages.size()), 1);
+    CHECK(mods[0].special_set[0] && mods[0].special_set[17] && !mods[0].special_set[1]);
+    CharacterPalettes pal(rom, mods);
+    CHECK(!pal.empty());
+    uint16_t cram[256] = {};
+    uint8_t offsets[16] = {};
+    CHECK(pal.display(cram, offsets) == cram);
+    for (int i = 0; i < 18; ++i) cram[0x6E + i] = uint16_t(0x0842 + 0x21 * i);
+    const uint16_t* shown = pal.display(cram, offsets);
+    CHECK_EQ(pal.substituted(), 1);
+    CHECK_EQ(shown[0x6E], 0x0011);
+    CHECK_EQ(shown[0x6F], cram[0x6F]);
+    CHECK_EQ(shown[0x7F], 0x0012);
+    // The level colours of the same file are not asked for and not touched.
+    load_block(cram, kKnuckles, 0x12, false);
+    offsets[kKnuckles] = 0x12;
+    shown = pal.display(cram, offsets);
+    CHECK_EQ(shown[0x13], cram[0x13]);
+    // Someone else's stage colours: as they are.
+    cram[0x70] = 0x7FFF;
+    CHECK(pal.display(cram, offsets) == cram);
+}
+
 TEST(character_mods, the_same_character_twice_is_found_by_its_colours) {
     const Rom rom = synthetic_rom();
     std::vector<CharacterMod> mods = {parsed(kKnuckles, "[Palette]\n1 = 0x0001\n")};

@@ -496,6 +496,39 @@ TEST(sprite_replace, each_graphic_drawn_is_dumped_once_with_its_colours) {
     CHECK(m->sprites->pending.empty());
 }
 
+TEST(sprite_pack, an_offset_file_moves_a_single_images_corner) {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "chaotix_test_sprite_offset";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const std::string d = dir.string();
+    const uint8_t px[6] = {0, 1, 2, 3, 4, 0};
+    const uint32_t pal[256] = {};
+    CHECK(write_png_indexed(d + "/32x_0123456789abcdef.png", px, 2, 3, pal, 256));
+    CHECK(write_png_indexed(d + "/32x_02_51.png", px, 3, 2, pal, 256));
+    CHECK(write_png_indexed(d + "/32x_02_52.png", px, 3, 2, pal, 256));
+    auto put = [&](const char* name, const char* text) {
+        if (FILE* f = std::fopen((d + "/" + name).c_str(), "w")) { std::fputs(text, f); std::fclose(f); }
+    };
+    put("32x_0123456789abcdef.png.offset", "-4 -6\n");
+    put("32x_02_52.png.offset", "left a bit\n");
+    SpritePack pack;
+    std::vector<std::string> messages;
+    CHECK_EQ(load_sprite_pack(pack, d, &messages), 3);
+    CHECK_EQ(messages.size(), size_t(1));
+    SpriteDraw h = call(0, 0);
+    h.hash = 0x0123456789abcdefull;
+    CHECK(pack.find(h) && pack.find(h)->dx == -4 && pack.find(h)->dy == -6);
+    SpriteDraw a = call(0, 0);
+    a.bank = 2;
+    a.frame = 0x51;
+    CHECK(pack.find(a) && pack.find(a)->dx == 0 && pack.find(a)->dy == 0);
+    a.frame = 0x52;
+    CHECK(pack.find(a) && pack.find(a)->dx == 0);
+    fs::remove_all(dir, ec);
+}
+
 TEST(sprite_pack, files_are_named_and_loaded_as_the_dumps_are) {
     CHECK(sprite_file_name(2, 0x51, 0) == std::string("32x_02_51.png"));
     CHECK(sprite_file_name(-1, -1, 0x0123456789abcdefull) == std::string("32x_0123456789abcdef.png"));
