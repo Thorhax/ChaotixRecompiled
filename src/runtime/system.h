@@ -247,6 +247,7 @@ public:
     // (moves::kStomping), which is in save states.
     uint8_t move_sets[8] = {};
     uint8_t move_state[2] = {};
+    int32_t glide_fall[2] = {};  // Ray's glide: its fall speed, 16.16 px a frame (runtime/moves.h)
     // FOLLOW's note of where the player stood before the game put one of the
     // two back on the tether's circle; used and dropped by the next
     // instruction's hook, within the same routine, so never in a save state.

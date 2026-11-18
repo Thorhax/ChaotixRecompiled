@@ -76,7 +76,7 @@ held = run("--moves", "0:1", "--press", "850:c:12", "--press", "864:right:8", "-
 check(all(held[f][2] < STOMP_SPEED for f in range(866, 880)), "left or right held: no stomp")
 
 # The drop dash: jump, let go, hold jump again until landing.
-DASH_SPEED = 0x0800  # ground speed, 8.8
+DASH_SPEED = 0x0C00  # ground speed, 8.8
 dash = run("--moves", "0:2", *JUMP, "--press", "866:c:80")
 dash_landing = next(f for f in sorted(dash) if f > 866 and dash[f][0] in (0x02, 0x06))
 after = dash[dash_landing + 2]
@@ -98,5 +98,16 @@ knuckles = subprocess.run(
 speeds = [s32(int.from_bytes(bytes.fromhex(l.split()[3])[0x1C:0x20], "big"))
           for l in knuckles.splitlines() if l.startswith("peek 8")]
 check(max(speeds) < STOMP_SPEED, "Mighty's move is not Knuckles'")
+
+# Ray's glide (on Knuckles' slot, whose own glide the character file turns off;
+# here it is still on, and the hook takes the press first): the game's glide
+# state, going the way he faces at the glide's least speed or more.
+glide = subprocess.run(
+    [HEADLESS, "--rom", ROM, "--frames", "900", "--stage", "300:0:1:0:2:7:0", "--moves", "2:4",
+     "--peek-every", "1:%04X:48" % PLAYER, *JUMP, *AGAIN], capture_output=True, text=True, check=True).stdout
+g = {int(l.split()[1]): bytes.fromhex(l.split()[3]) for l in glide.splitlines() if l.startswith("peek ")}
+check(g[868][7] == 0x24 and s32(int.from_bytes(g[868][0x18:0x1C], "big")) >= 0x30000 - 0x2000,
+      "Ray's glide: the glide state, at 3 px a frame or more (state %02X)" % g[868][7])
+check(g[880][7] == 0x24, "and it goes on with jump let go")
 
 sys.exit(1 if FAILED else 0)

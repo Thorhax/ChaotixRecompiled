@@ -31,7 +31,28 @@
 // at 8 px a frame (more if it was already moving that way, up to 12), the way
 // it faces or the way left or right is held. Letting go before landing drops
 // the charge. Ground speed is the object's word +$2C (8.8 px a frame) and
-// bit 3 of byte +$25 is set while it faces left (docs/RING_TETHER.md).
+// bit 3 of byte +$25 is set while it faces left (docs/RING_TETHER.md). The
+// game's own sounds are asked for with it: the spin dash's charge ($6C) when
+// the dash is charged and its release ($3C) on landing.
+//
+// RAY'S GLIDE (Sonic Mania Plus): jump pressed again in a jump sets him
+// gliding the way he faces, at 3 px a frame or his own speed if that is more.
+// Forward held (or nothing) he dives: he falls faster and gains speed. Back
+// held he pulls up: the speed he has becomes height, and the climb costs
+// speed until he levels out and sinks slowly; forward dives again. It ends
+// on the ground or when anything else takes him (a hit, a wall).
+//
+// It runs in the game's own glide state ($24, Knuckles'), which shows the
+// glide's frames and lands; the airborne state ($08) shows the ball whatever
+// is written. That state's code ($88AD1C) takes its speeds from the
+// character's record, so the character file's [Stats] must make it harmless:
+// glide_speed 0x7FFF and glide_acceleration 0 (X is left as written),
+// glide_fall_speed 1 (the game's own fall, 1/256 px a frame: it sets the Y
+// velocity from it every frame, so the glide's own fall is added to the Y
+// position here and kept in Machine::glide_fall), and abilities A without
+// bit 6 (or the game starts its own glide from the press). The state ends
+// when jump is not held and turns on left or right: the hook holds jump and
+// clears the direction word (+8) in the button record while he glides.
 #pragma once
 #include <cstdint>
 
@@ -45,6 +66,7 @@ namespace moves {
 enum : uint8_t {
     kStomp = 0x01,
     kDropDash = 0x02,
+    kRayGlide = 0x04,  // instead of the other two, not with them
 };
 // A move by the name a character file's [Moves] section gives it; 0 if none.
 uint8_t by_name(const char* name);
@@ -54,11 +76,22 @@ enum : uint8_t {
     kStomping = 0x01,
     kDashReleased = 0x02,  // jump was let go of since the jump began
     kDashCount = 0xFC,     // frames jump has been held again, x 4
+    // Ray's glide (a character with it has neither of the moves above).
+    kGlideOn = 0x04,
+    kGlideUp = 0x08,       // climbing or levelling out, not diving
+    kGlideLeft = 0x10,     // the way it went off
 };
 
 // Drop dash: frames of holding before it is charged, and its speeds (8.8).
 inline constexpr int kDropDashCharge = 20;
-inline constexpr int kDropDashSpeed = 0x0800, kDropDashMax = 0x0C00;
+inline constexpr int kDropDashSpeed = 0x0C00, kDropDashMax = 0x1000;
+
+// Ray's glide, 16.16 px a frame: the least speed it starts with, the dive's
+// pull and push, the climb's pull and drag, and the limits.
+inline constexpr int32_t kGlideStart = 0x30000, kGlideDiveFall = 0x2400, kGlideDivePush = 0x1400,
+                         kGlideClimbFall = 0x1C00, kGlideClimbDrag = 0x0C00, kGlideMaxSpeed = 0xC0000,
+                         kGlideMinSpeed = 0x10000, kGlideMaxFall = 0x80000, kGlideSink = 0x20000,
+                         kGlideOwnFall = 0x100;  // glide_fall_speed 1, as the game adds it
 
 // The stomp's first speed, 16.16 px a frame ($999 in 8.8, the mod's value).
 inline constexpr int32_t kStompSpeed = 0x00099900;

@@ -101,6 +101,7 @@ template <class A> void transfer(A& a, Machine& m, unsigned flags) {
     a(m.stage_pending);
     a(m.tether_called);  // runtime/tether.h (format 2)
     a(m.move_state);     // runtime/moves.h (format 3, this fork)
+    a(m.glide_fall);     // (format 4, this fork)
     a(m.fb_margin);
     // Memory.
     a(m.wram); a(m.sdram); a(m.zram); a(m.bios_stub);
