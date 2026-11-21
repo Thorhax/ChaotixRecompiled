@@ -248,6 +248,11 @@ public:
     uint8_t move_sets[8] = {};
     uint8_t move_state[2] = {};
     int32_t glide_fall[2] = {};  // Ray's glide: its fall speed, 16.16 px a frame (runtime/moves.h)
+    // The stomp's landing, for the picture only (runtime/moves.h; not in save
+    // states, as nothing the machine does depends on it): frames of screen
+    // shake left, and the dust (where, in level pixels, and the frame it began).
+    int shake = 0;
+    struct StompDust { bool on = false; uint64_t start = 0; int32_t x = 0, y = 0; } stomp_dust;
     // The rest of that glide (save state format 5): how the nose points
     // (0x10 down to 0x70 up), how strong the next pull is, the climb a pull
     // still owes, and the speed in store (8.8 px a frame).

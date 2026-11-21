@@ -14,7 +14,10 @@
 // with a short hop: the game's own jump, from a press the hook makes for
 // that frame, which the game cuts short because the button is not held.
 // Left or right held leaves the press to the game, so Mighty's wall cling
-// (jump against a wall) is as it was.
+// (jump against a wall) is as it was. As in Sonic Mania, the landing shakes
+// the screen and kicks up dust at the feet; both are drawn into the picture
+// only (Machine::shake, Machine::stomp_dust; sprite_record.h draws the dust
+// from the game's own smoke puffs), so the game runs as without them.
 //
 // What was measured (chaotix_headless --peek-every, Mighty in Botanic Base 1):
 // the player's object is at [FFE034] and the partner's at [FFE036]; object
@@ -28,10 +31,11 @@
 // DROP DASH (Sonic's, from Sonic Mania and Sonic 3 A.I.R.): in a jump, letting
 // go of jump and holding it again charges a dash; held for a third of a
 // second and still held on landing, the character leaves the ground rolling
-// at 8 px a frame (more if it was already moving that way, up to 12), the way
+// at 12 px a frame (more if it was already moving that way, up to 16), the way
 // it faces or the way left or right is held. Letting go before landing drops
-// the charge. Ground speed is the object's word +$2C (8.8 px a frame) and
-// bit 3 of byte +$25 is set while it faces left (docs/RING_TETHER.md). The
+// the charge. Ground speed is the object's word +$2C (8.8 px a frame), counted
+// forward, the way the character faces: bit 3 of byte +$25 is set while it
+// faces left (docs/RING_TETHER.md). The
 // game's own sounds are asked for with it: the spin dash's charge ($6C) when
 // the dash is charged and its release ($3C) on landing.
 //
@@ -113,6 +117,12 @@ inline constexpr int32_t kGlideOwnFall = 0x100,  // glide_fall_speed 1, as the g
 // The hammer: how long a swing shows, and its frames in a pack's body sheet
 // (kHammerFirst and up, kHammerPoses of them, each shown kHammerHold frames).
 inline constexpr int kHammerFrames = 24, kHammerFirst = 0x80, kHammerPoses = 8, kHammerHold = 3;
+
+// The stomp's landing: frames of screen shake, the shake's offsets (picture
+// lines, one a frame), and the dust: how long it lasts, in frames.
+inline constexpr int kStompShakeFrames = 8;
+inline constexpr int8_t kStompShake[kStompShakeFrames] = {4, -4, 3, -3, 2, -2, 1, -1};
+inline constexpr int kStompDustFrames = 18;
 
 // The stomp's first speed, 16.16 px a frame ($999 in 8.8, the mod's value).
 inline constexpr int32_t kStompSpeed = 0x00099900;

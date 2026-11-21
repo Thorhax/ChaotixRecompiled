@@ -1886,12 +1886,16 @@ std::vector<std::string> mod_folders(const App& app, const char* kind) {
 // costs a little every frame. Called every frame, as a copy of the machine
 // put back (the title snapshot) may carry another one.
 void update_sprite_recorder(App& app) {
-    const bool want = app.sprite_pack || app.cfg.dump_graphics || app.cfg.smooth_start;
+    // (The stomp's dust is drawn by the recorder: runtime/moves.h.)
+    const bool effects = std::any_of(std::begin(app.m->move_sets), std::end(app.m->move_sets),
+                                     [](uint8_t s) { return (s & moves::kStomp) != 0; });
+    const bool want = app.sprite_pack || app.cfg.dump_graphics || app.cfg.smooth_start || effects;
     if (!want) app.sprites.reset();
     else if (!app.sprites) app.sprites = std::make_shared<SpriteRecorder>();
     if (app.sprites) {
         app.sprites->set_pack(app.sprite_pack);
         app.sprites->set_start_glide(app.cfg.smooth_start);
+        app.sprites->set_effects(effects);
         app.sprites->dumping = app.cfg.dump_graphics;
     }
     if (app.m->sprites != app.sprites) app.m->sprites = app.sprites;
@@ -2752,14 +2756,25 @@ int main(int argc, char** argv) {
         hooks.mod_packs = [&app, mods_allowed]() -> std::vector<mod_packs::Pack>* {
             return app.m && mods_allowed ? &app.packs : nullptr;
         };
-        hooks.mods_changed = [&app] { if (app.m) app.packs_restart = game_signature(app) != app.packs_game_signature; };
-        hooks.reload_mods = [&app, mods_allowed] {
+        // A pack's patches and its characters' stats are read when the game
+        // starts; its pictures, colours and moves change at once. Until the
+        // restart a character is half one and half the other (the new moves
+        // with the old stats), so it is said where it cannot be missed.
+        const auto restart_notice = [&app] {
+            if (app.packs_restart) notice(app, "MODS", "RESTART THE GAME", "FOR STATS AND PATCHES.");
+        };
+        hooks.mods_changed = [&app, restart_notice] {
+            if (app.m) app.packs_restart = game_signature(app) != app.packs_game_signature;
+            restart_notice();
+        };
+        hooks.reload_mods = [&app, mods_allowed, restart_notice] {
             if (!app.m || !mods_allowed) return;
             // Mods change what the game does: both players must start with
             // the same, so they wait for the end of the session.
             if (app.net.on) { notice(app, "NETPLAY", "MODS NOT RELOADED", "NOT DURING NETPLAY."); return; }
             load_mods(app, true);
             app.packs_restart = game_signature(app) != app.packs_game_signature;
+            restart_notice();
         };
         hooks.mods_need_restart = [&app] { return app.packs_restart; };
         hooks.mod_preview = [&app](const mod_packs::Pack& p, float* w, float* h) -> SDL_Texture* {
@@ -3560,6 +3575,12 @@ int main(int argc, char** argv) {
             app.fps_stats.emu_avg_ms = fps_sims ? emu_sum_ms / double(fps_sims) : 0.0;
             app.fps_stats.emu_worst_ms = emu_worst_frame_ms;
             app.fps_stats.interpreter = !dispatch_snapshot().recompiled;
+            // With SHOW FPS on, the same numbers go to the log once a second (a console's
+            // own overlay can cover the counter).
+            if (app.cfg.show_fps)
+                LOGI("perf", "shown %.1f fps, emulated %.1f fps, emulation %.2f ms a frame (worst %.2f)",
+                     app.fps_stats.presented_fps, app.fps_stats.emulated_fps, app.fps_stats.emu_avg_ms,
+                     app.fps_stats.emu_worst_ms);
             emu_sum_ms = emu_worst_frame_ms = 0;
             if (app.log_timing)
                 LOGI("timing", "frame %llu: %.1f presented/s, %.1f emulated/s, slowest pass %.1f ms (emulation %.1f, present %.1f)%s",

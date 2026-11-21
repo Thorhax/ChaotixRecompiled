@@ -217,6 +217,7 @@ void SpriteRecorder::flipped(const Machine& m) {
     // The glide looks at each picture as it goes on display, and before the
     // next one is drawn: the layer must follow that one from its start.
     moves_on_ = false;
+    if (effects_on_) add_effects(m, lists_[back ^ 1]);
     if (glide_on_) {
         const SpriteList& shown = lists_[back ^ 1];
         moves_on_ = glide_.picture(shown, moves_);
@@ -230,7 +231,7 @@ void SpriteRecorder::flipped(const Machine& m) {
 }
 
 void SpriteRecorder::update_layer() {
-    const bool want = pack_ || (glide_on_ && glide_.watching());
+    const bool want = pack_ || effects_on_ || (glide_on_ && glide_.watching());
     if (!want) layer_.reset();
     else if (!layer_) layer_ = std::make_unique<SpriteLayer>();
 }
@@ -242,6 +243,65 @@ void SpriteRecorder::set_start_glide(bool on) {
     moves_on_ = false;
     shown_key_ = ~0ull;
     update_layer();
+}
+
+void SpriteRecorder::set_effects(bool on) {
+    if (on == effects_on_) return;
+    effects_on_ = on;
+    shown_key_ = ~0ull;
+    update_layer();
+}
+
+// The stomp's dust: the game's own smoke puff (the level's explosion bank,
+// kDustBank, frames kDustFrame on), drawn small at the landing's two sides,
+// growing and drifting outward as it fades. Placed from the player's body as
+// this picture drew it, so it stays where the landing was as the camera moves.
+void SpriteRecorder::add_effects(const Machine& m, SpriteList& list) {
+    constexpr int kDustBank = 0x1C, kDustFrame = 0x08, kDustSteps = 6;
+    const Machine::StompDust& dust = m.stomp_dust;
+    if (!dust.on || m.frame_count < dust.start || m.frame_count - dust.start >= uint64_t(moves::kStompDustFrames)) return;
+    const int age = int(m.frame_count - dust.start);
+    const uint32_t obj = uint32_t(m.wram[0xE034] << 8 | m.wram[0xE035]);
+    if (!obj) return;
+    const SpriteDraw* body = nullptr;
+    for (const SpriteDraw& d : list.draws)
+        if (d.colour == 0x12 && d.bank >= 0 && d.bank < 8 && !d.added) { body = &d; break; }
+    if (!body) return;
+    const int px = int16_t(m.wram[(obj + 8) & 0xFFFF] << 8 | m.wram[(obj + 9) & 0xFFFF]);
+    const int py = int16_t(m.wram[(obj + 0xC) & 0xFFFF] << 8 | m.wram[(obj + 0xD) & 0xFFFF]);
+    const int frame = kDustFrame + std::min(age * kDustSteps / moves::kStompDustFrames, kDustSteps - 1);
+    const uint32_t table = be32(m.sdram + kBankTable + 4 * kDustBank);
+    uint32_t ptr = 0;
+    if (!plausible_graphic(m, canonical(table)) || !read32(m, canonical(table) + 4 * frame, &ptr) || ptr == 0xFFFFFFFFu ||
+        !plausible_graphic(m, canonical(ptr)))
+        return;
+    uint32_t avail = 0;
+    const uint8_t* p = host(m, ptr, &avail);
+    const uint32_t size = p ? graphic_size(p, avail) : 0;
+    if (!size) return;
+    const uint32_t data = uint32_t(list.pool.size());
+    list.pool.insert(list.pool.end(), p, p + size);
+    for (int side = -1; side <= 1; side += 2)
+        for (int k = 0; k < 2; ++k) {
+            SpriteDraw d = *body;
+            d.graphic = d.source = ptr;
+            d.flags = side < 0 ? 1u : 0u;
+            d.colour = 0;
+            d.bank = int16_t(kDustBank);
+            d.frame = int16_t(frame);
+            d.kind = SpriteKind::Scaled;
+            // (The scale is a step through the graphic: 0x100 its own size, more is smaller.)
+            d.sx = d.sy = 0x2C0 + 0x40 * k - age * 8;
+            d.clip.scale_min = int16_t(std::min<int32_t>(d.clip.scale_min, d.sx));
+            d.clip.scale_max = int16_t(std::max<int32_t>(d.clip.scale_max, d.sx));
+            d.x = body->x + (dust.x - px) + side * (5 + 9 * k + age * (2 + k) / 2);
+            d.y = body->y + (dust.y - py) - 3 - age / 4 - 2 * k;
+            d.data = data;
+            d.size = size;
+            d.hash = hash(p, size);
+            d.added = true;
+            list.draws.push_back(d);
+        }
 }
 
 void SpriteRecorder::reset() {
@@ -290,7 +350,7 @@ void SpriteRecorder::shown(const Machine& m, const uint8_t*& fb, const uint8_t*&
 // picture goes on display.
 void SpriteRecorder::collect_dumps(const Machine& m, const SpriteList& list) {
     for (const SpriteDraw& d : list.draws) {
-        if (!d.size) continue;
+        if (!d.size || d.added) continue;
         const bool fresh = d.bank >= 0 ? dumped_slots_.insert(uint32_t(d.bank) << 8 | uint32_t(d.frame)).second
                                        : dumped_hashes_.insert(d.hash).second;
         if (!fresh) continue;
@@ -1061,7 +1121,7 @@ bool rasterise_sprite(const SpriteDraw& d, const uint8_t* data, uint32_t size, S
 
 void rebuild_sprites(const SpriteList& list, SpriteCanvas& canvas) {
     for (const SpriteDraw& d : list.draws)
-        rasterise_sprite(d, list.bytes(d), d.size, canvas, d.kind == SpriteKind::Warped ? list.pool.data() + d.warp : nullptr);
+        if (!d.added) rasterise_sprite(d, list.bytes(d), d.size, canvas, d.kind == SpriteKind::Warped ? list.pool.data() + d.warp : nullptr);
 }
 
 SpriteCheck check_sprites(const Machine& m, const SpriteRecorder& r, SpriteCanvas& canvas) {

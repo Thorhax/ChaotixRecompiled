@@ -74,6 +74,9 @@ struct SpriteDraw {
     uint64_t hash = 0;     // FNV-1a of the source graphic's bytes
     SpriteClip clip;
     uint32_t data = 0, size = 0;  // the source graphic's bytes in SpriteList::pool
+    // This fork: a draw the game did not make, added to the picture (the
+    // stomp's dust, runtime/moves.h): composed on top, never compared.
+    bool added = false;
 };
 
 constexpr uint32_t kWarpParamBytes = 16, kWarpSineBytes = 512;
@@ -143,6 +146,9 @@ public:
     // The writes are followed only while a glide may come.
     void set_start_glide(bool on);
     bool start_glide() const { return glide_on_; }
+    // This fork: the stomp's dust (runtime/moves.h, Machine::stomp_dust) is
+    // drawn into the pictures while this is on (a character has the stomp).
+    void set_effects(bool on);
     const StartGlide& glide() const { return glide_; }
 
     // Dumping: each graphic drawn, once (by its name), into `pending` for
@@ -188,6 +194,8 @@ private:
 
     std::unique_ptr<SpriteLayer> layer_;
     bool glide_on_ = false;
+    bool effects_on_ = false;
+    void add_effects(const Machine& m, SpriteList& list);
     StartGlide glide_;
     std::vector<SpriteMove> moves_;  // for the displayed list, one per draw
     uint64_t moves_key_ = ~0ull;

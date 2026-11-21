@@ -397,7 +397,7 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
     for (size_t j = 0; j < list.draws.size(); ++j) {
         const SpriteDraw& d = list.draws[j];
         if (!d.size) continue;
-        if ((moves && j < moves->size() && (*moves)[j].on) || (!hand.empty() && hand[j].on)) ++moved;
+        if ((moves && j < moves->size() && (*moves)[j].on) || (!hand.empty() && hand[j].on) || d.added) ++moved;
         const SpriteImage* img = pack ? pack->find(d) : nullptr;
         if (!img) continue;
         rep[j] = graphic_for(d, list.bytes(d), *img);
@@ -437,7 +437,12 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
         Replay r{this, &t, uint32_t(std::min<size_t>(j, 0xFFFF)), d.route, false, true};
         const SpriteMove* mv = moves && j < moves->size() && (*moves)[j].on ? &(*moves)[j] : nullptr;
         const HandMove* hs = !hand.empty() && hand[j].on ? &hand[j] : nullptr;
-        if (rep[j] || mv || hs) {
+        if (d.added) {
+            // Not in the emulated buffer: only drawn, on top.
+            r.mark = true;
+            r.write = true;
+            rasterise_sprite(d, list.bytes(d), d.size, sink, &r, warp);
+        } else if (rep[j] || mv || hs) {
             // The original's bytes and those drawn in its place (the
             // replacement, or the draw moved: start_glide.h) are composed
             // again.

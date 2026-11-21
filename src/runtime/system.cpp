@@ -1,6 +1,7 @@
 #include "system.h"
 #include "log.h"
 #include "cpu/m68k/m68k_interp.h"
+#include "runtime/moves.h"
 #include "runtime/patches.h"
 #include "runtime/divide.h"
 #include "audio/gain_ramp.h"
@@ -532,6 +533,19 @@ void Machine::run_frame() {
     fb_extra_bottom = std::clamp(wide_extra_bottom, 0, patches::kMaxWideExtraBottom);
     fb_width = vdp.width() + 2 * fb_extra;
     fb_height = kActiveLines + fb_extra_bottom;
+    // This fork: the stomp's landing shakes the picture (runtime/moves.h),
+    // moving the finished frame up or down; the edge line fills the gap.
+    if (shake > 0) {
+        const int dy = moves::kStompShake[moves::kStompShakeFrames - shake];
+        --shake;
+        const size_t w = size_t(fb_width) * sizeof(uint32_t);
+        if (dy > 0)
+            for (int r = fb_height - 1; r >= 0; --r)
+                std::memcpy(framebuffer + r * kScreenWidth, framebuffer + std::max(r - dy, 0) * kScreenWidth, w);
+        else if (dy < 0)
+            for (int r = 0; r < fb_height; ++r)
+                std::memcpy(framebuffer + r * kScreenWidth, framebuffer + std::min(r - dy, fb_height - 1) * kScreenWidth, w);
+    }
     ++frame_count;
     stats.frame = frame_count;
 }

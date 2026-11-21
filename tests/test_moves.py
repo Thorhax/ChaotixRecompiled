@@ -28,7 +28,9 @@ def s32(v):
 
 
 def run(*extra):
-    """Per frame: (state, x velocity, y velocity, ground speed) of the player's object."""
+    """Per frame: (state, x velocity, y velocity, ground speed, x, facing left) of the player's object.
+
+    Ground speed counts forward, the way the character faces."""
     out = subprocess.run(
         [HEADLESS, "--rom", ROM, "--frames", "960", "--stage", "300:0:1:0:0:7:0",
          "--peek-every", "1:%04X:48" % PLAYER, *extra],
@@ -40,7 +42,8 @@ def run(*extra):
             b = bytes.fromhex(p[3])
             frames[int(p[1])] = (b[7], s32(int.from_bytes(b[0x18:0x1C], "big")),
                                  s32(int.from_bytes(b[0x1C:0x20], "big")),
-                                 int.from_bytes(b[0x2C:0x2E], "big", signed=True))
+                                 int.from_bytes(b[0x2C:0x2E], "big", signed=True),
+                                 int.from_bytes(b[8:10], "big"), b[0x25] & 8 != 0)
     return frames
 
 
@@ -89,8 +92,17 @@ late = run("--moves", "0:2", "--press", "850:c:80")
 check(all(late[f][3] == 0 for f in range(850, 940)), "jump held all the way from the ground: no dash")
 left = run("--moves", "0:2", *JUMP, "--press", "866:c:80", "--press", "880:left:60")
 left_landing = next(f for f in sorted(left) if f > 866 and left[f][0] in (0x02, 0x06))
-check(left[left_landing + 2][0] == 0x06 and left[left_landing + 2][3] <= -(DASH_SPEED - 0x100),
-      "left held: the dash goes left (ground speed %d)" % left[left_landing + 2][3])
+after = left[left_landing + 4]  # (a wall stops it a few frames later)
+check(after[0] == 0x06 and after[5] and after[3] >= DASH_SPEED - 0x100 and after[4] < left[left_landing][4] - 30,
+      "left held: the dash goes left (ground speed %d, x %d to %d)" % (after[3], left[left_landing][4], after[4]))
+# Facing left with nothing held (the partner behind, to the right): the dash
+# still goes left (it went right when ground speed was taken for left-to-right).
+away = run("--moves", "0:2", "--frames", "1200", "--press", "860:right:200", "--press", "1062:left:60",
+           "--press", "1124:c:6", "--press", "1134:c:50")
+away_landing = next(f for f in sorted(away) if f > 1134 and away[f][0] in (0x02, 0x06))
+after = away[away_landing + 8]
+check(after[0] == 0x06 and after[5] and after[4] < away[away_landing][4] - 40,
+      "facing left, nothing held: the dash goes left (x %d to %d)" % (away[away_landing][4], after[4]))
 
 # The hammer (with the drop dash, as a pack gives it): jump pressed again in a
 # jump makes the character 12 pixels larger each way (object bytes +$22, +$23,
@@ -134,6 +146,16 @@ check(all(g[f][0x28] <= 4 for f in gliding) and max(g[f][0x28] for f in gliding)
 landed = next((f for f in sorted(g) if f > 868 and g[f][7] == 0x02), None)
 check(landed is not None and landed + 2 in g and int.from_bytes(g[landed + 2][0x2C:0x2E], "big", signed=True) >= 0x200,
       "landing from the glide keeps his speed (landed at %s)" % landed)
+# The same to the left: he lands facing left and runs on that way.
+lg = {int(l.split()[1]): bytes.fromhex(l.split()[3]) for l in subprocess.run(
+    [HEADLESS, "--rom", ROM, "--frames", "1230", "--stage", "300:0:1:0:2:7:0", "--moves", "2:4",
+     "--peek-every", "1:%04X:48" % PLAYER, "--press", "860:right:200", "--press", "1062:left:60",
+     "--press", "1124:c:6", "--press", "1134:c:80", "--press", "1134:left:40"],
+    capture_output=True, text=True, check=True).stdout.splitlines() if l.startswith("peek ")}
+lg_landed = next((f for f in sorted(lg) if f > 1136 and lg[f][7] == 0x02), None)
+lx = lambda f: int.from_bytes(lg[f][8:10], "big")
+check(lg_landed is not None and lg[lg_landed + 4][0x25] & 8 and lx(lg_landed + 8) < lx(lg_landed) - 8,
+      "gliding left, he lands facing left and runs on left (landed at %s)" % lg_landed)
 up = glide_run("--press", "866:c:120")
 floating = [f for f in sorted(up) if f >= 880 and up[f][7] == 0x24]
 check(len(floating) > 20 and all(up[f][0x28] <= 1 for f in floating[8:]),

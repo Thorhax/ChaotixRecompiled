@@ -36,6 +36,7 @@
 #include "renderer/tile_pack.h"
 #include "runtime/lobby.h"
 #include "runtime/mod_packs.h"
+#include "runtime/moves.h"
 #include "runtime/patches.h"
 #include "runtime/rewind.h"
 #include "runtime/save_state.h"
@@ -1058,11 +1059,15 @@ int main(int argc, char** argv) {
         if (sprite_pack->empty()) sprite_pack = nullptr;
     }
     if (sprite_pack || !dump_tiles_dir.empty()) want_sprites = true;
+    // The stomp's dust is drawn by the recorder (runtime/moves.h).
+    const bool stomp_effects = std::any_of(std::begin(move_sets), std::end(move_sets), [](uint8_t s) { return (s & moves::kStomp) != 0; });
+    if (stomp_effects) want_sprites = true;
     if (want_sprites) {
         m->sprites = std::make_shared<SpriteRecorder>();
         m->sprites->track_writes = sprites_check;
         m->sprites->set_pack(sprite_pack);
         m->sprites->set_start_glide(start_glide);
+        m->sprites->set_effects(stomp_effects);
         m->sprites->dumping = !dump_tiles_dir.empty();
     }
     if (six_button >= 0) m->input.six_button[0] = m->input.six_button[1] = six_button != 0;
@@ -1113,6 +1118,7 @@ int main(int argc, char** argv) {
             ref->sprites = std::make_shared<SpriteRecorder>();
             ref->sprites->set_pack(sprite_pack);
             ref->sprites->set_start_glide(start_glide);
+            ref->sprites->set_effects(stomp_effects);
         }
         if (!rs.active) std::printf("warning: --lockstep without generated code compares the interpreter with itself\n");
     }

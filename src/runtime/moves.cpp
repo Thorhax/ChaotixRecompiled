@@ -29,6 +29,8 @@ constexpr uint32_t kObjState = 0x07;
 constexpr uint32_t kObjXVel = 0x18, kObjYVel = 0x1C;  // 16.16
 constexpr uint32_t kObjAnim = 0x26;
 constexpr uint32_t kObjHalfWidth = 0x22, kObjHalfHeight = 0x23;  // bytes, pixels
+constexpr uint32_t kObjX = 0x08;  // word, pixels
+constexpr uint32_t kObjY = 0x0C;  // long, 16.16 (its first word: pixels)
 constexpr uint8_t kStateGround = 0x02, kStateJump = 0x04, kStateRoll = 0x06, kStateFall = 0x08;
 constexpr uint16_t kAnimBall = 0x12;
 
@@ -61,7 +63,14 @@ void stomp(Machine& m, int who, uint32_t obj, uint32_t pad) {
         }
         now &= uint8_t(~kStomping);
         // Landed: the hop. A press the game sees this frame only.
-        if (state == kStateGround || state == kStateRoll) m.wram[(pad + 3) & 0xFFFF] |= kJump;
+        if (state == kStateGround || state == kStateRoll) {
+            m.wram[(pad + 3) & 0xFFFF] |= kJump;
+            // And, as in Sonic Mania, the screen shakes and dust flies at the
+            // feet (both only in the picture).
+            m.shake = kStompShakeFrames;
+            m.stomp_dust = Machine::StompDust{true, m.frame_count, int16_t(rd16(m, obj + kObjX)),
+                                              int16_t(rd16(m, obj + kObjY)) + m.wram[(obj + kObjHalfHeight) & 0xFFFF]};
+        }
         return;
     }
     if (!in_air || rd16(m, obj + kObjAnim) != kAnimBall) return;
@@ -105,15 +114,17 @@ void drop_dash(Machine& m, int who, uint32_t obj, uint32_t pad) {
     bool left = (m.wram[(obj + kObjFlags) & 0xFFFF] & 0x08) != 0;
     if (held & 0x04) left = true;
     if (held & 0x08) left = false;
+    // Ground speed counts forward, the way the character faces (not to the
+    // right): speed the way it faced at landing is kept if it goes on that way.
+    uint8_t& flags = m.wram[(obj + kObjFlags) & 0xFFFF];
+    const bool faced_left = (flags & 0x08) != 0;
     const int had = int16_t(rd16(m, obj + kObjGroundSpeed));
-    const int along = left ? -had : had;
+    const int along = faced_left == left ? had : -had;
     int speed = kDropDashSpeed;
     if (along > 0) speed = std::min(kDropDashSpeed + along / 4, kDropDashMax);
-    const int v = left ? -speed : speed;
-    LOGD("moves", "drop dash: character %d, ground speed %d", who, v);
-    wr16(m, obj + kObjGroundSpeed, uint16_t(v));
-    wr32(m, obj + kObjXVel, uint32_t(int32_t(v) * 256));
-    uint8_t& flags = m.wram[(obj + kObjFlags) & 0xFFFF];
+    LOGD("moves", "drop dash: character %d, speed %d %s", who, speed, left ? "left" : "right");
+    wr16(m, obj + kObjGroundSpeed, uint16_t(speed));
+    wr32(m, obj + kObjXVel, uint32_t(int32_t(left ? -speed : speed) * 256));
     flags = uint8_t(left ? flags | 0x08 : flags & ~0x08);
     m.wram[(obj + kObjState) & 0xFFFF] = kStateRoll;
     wr16(m, obj + kObjAnim, kAnimBall);
@@ -122,7 +133,6 @@ void drop_dash(Machine& m, int who, uint32_t obj, uint32_t pad) {
 
 constexpr uint16_t kAnimGlide = 0x40;
 constexpr uint8_t kStateGlide = 0x24;
-constexpr uint32_t kObjY = 0x0C;          // long, 16.16
 constexpr uint32_t kObjAnimFrame = 0x28;  // 8.8
 
 // 256 x the sine of 0, 4, ... 64 of the 256 steps in a circle, as the game the glide is from has it.
@@ -183,9 +193,13 @@ void ray_glide(Machine& m, int who, uint32_t obj, uint32_t pad) {
         now = 0;
         if (state == kStateGround || state == kStateRoll) {
             // The state's landing leaves him standing (ground speed 0) with
-            // the X velocity still as it was: he runs on with what he had.
+            // the X velocity still as it was: he runs on with what he had,
+            // facing the way he went (ground speed counts forward).
             const int32_t v = std::clamp(int32_t(rd32(m, obj + kObjXVel)) / 0x100, -kGlideLandMax, kGlideLandMax);
-            if (rd16(m, obj + kObjGroundSpeed) == 0) wr16(m, obj + kObjGroundSpeed, uint16_t(int16_t(v)));
+            if (rd16(m, obj + kObjGroundSpeed) == 0 && v) {
+                wr16(m, obj + kObjGroundSpeed, uint16_t(int16_t(v < 0 ? -v : v)));
+                flags = uint8_t(v < 0 ? flags | 0x08 : flags & ~0x08);
+            }
         }
         if (state == 0x26 || state == 0x28) {
             state = kStateFall;

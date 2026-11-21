@@ -226,7 +226,7 @@ nothing more for the bonus stage.
 
 ## Extra moves: `[Moves]` (this fork)
 
-Two moves the game never had can be given to a slot:
+Moves the game never had can be given to a slot:
 
 ```ini
 [Moves]
@@ -235,6 +235,11 @@ drop_dash = 1   ; in a jump, hold jump again; landing starts a roll
 ray_glide = 1   ; jump again in the air and hold it to glide: forward dives, back pulls up
 hammer = 1      ; jump again in the air swings a hammer around the character
 ```
+
+As in Sonic Mania, the stomp's landing shakes the screen for a few frames
+and kicks up dust at the feet (the game's own smoke puffs, drawn small).
+Both are in the picture only: the game runs as without them. The drop dash
+goes the way the character faces, or the way left or right is held.
 
 `hammer` is Amy's hammer spin from Sonic Origins Plus. It goes with
 `drop_dash` or alone. For 24 frames the character is still the ball the
