@@ -154,6 +154,12 @@ void ray_glide(Machine& m, int who, uint32_t obj, uint32_t pad) {
         // The ground, a hit, a wall: over. That state's code takes hold of a
         // wall as Knuckles does ($26, $28): Ray does not climb, he drops.
         now = 0;
+        if (state == kStateGround || state == kStateRoll) {
+            // The state's landing leaves him standing (ground speed 0) with
+            // the X velocity still as it was: he runs on with what he had.
+            const int32_t v = std::clamp(int32_t(rd32(m, obj + kObjXVel)) / 0x100, -kGlideLandMax, kGlideLandMax);
+            if (rd16(m, obj + kObjGroundSpeed) == 0) wr16(m, obj + kObjGroundSpeed, uint16_t(int16_t(v)));
+        }
         if (state == 0x26 || state == 0x28) {
             state = kStateFall;
             wr32(m, obj + kObjXVel, 0);
@@ -193,6 +199,12 @@ void ray_glide(Machine& m, int who, uint32_t obj, uint32_t pad) {
         wr32(m, obj + kObjXVel, uint32_t(left ? -speed : speed));
         flags = uint8_t(left ? flags | 0x08 : flags & ~0x08);
     }
+    // The pose: the glide's animation ($40) has five frames (Knuckles' 58-5C,
+    // which his own glide runs through once); here the frame says how he
+    // climbs or falls, from a steep climb to a steep dive. The game's step
+    // adds a quarter of a frame to what is written, which stays in the frame.
+    const int pose = fall < -0x28000 ? 0 : fall < -0x8000 ? 1 : fall < 0x1C000 ? 2 : fall < 0x48000 ? 3 : 4;
+    wr16(m, obj + kObjAnimFrame, uint16_t(pose << 8));
     // The state's code moves him by the X velocity and by its own small fall:
     // the rest of the fall is added to where he is.
     wr32(m, obj + kObjY, rd32(m, obj + kObjY) + uint32_t(fall - kGlideOwnFall));

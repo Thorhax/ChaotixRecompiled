@@ -103,11 +103,19 @@ check(max(speeds) < STOMP_SPEED, "Mighty's move is not Knuckles'")
 # here it is still on, and the hook takes the press first): the game's glide
 # state, going the way he faces at the glide's least speed or more.
 glide = subprocess.run(
-    [HEADLESS, "--rom", ROM, "--frames", "900", "--stage", "300:0:1:0:2:7:0", "--moves", "2:4",
+    [HEADLESS, "--rom", ROM, "--frames", "1000", "--stage", "300:0:1:0:2:7:0", "--moves", "2:4",
      "--peek-every", "1:%04X:48" % PLAYER, *JUMP, *AGAIN], capture_output=True, text=True, check=True).stdout
 g = {int(l.split()[1]): bytes.fromhex(l.split()[3]) for l in glide.splitlines() if l.startswith("peek ")}
 check(g[868][7] == 0x24 and s32(int.from_bytes(g[868][0x18:0x1C], "big")) >= 0x30000 - 0x2000,
       "Ray's glide: the glide state, at 3 px a frame or more (state %02X)" % g[868][7])
 check(g[880][7] == 0x24, "and it goes on with jump let go")
+# The glide's frame is the pose for how he climbs or falls (0 a steep climb to
+# 4 a steep dive), and landing keeps his speed as ground speed.
+gliding = [f for f in sorted(g) if f >= 868 and g[f][7] == 0x24]
+check(all(g[f][0x28] <= 4 for f in gliding) and max(g[f][0x28] for f in gliding) >= 3,
+      "the glide's pose follows the fall (poses %s)" % sorted({g[f][0x28] for f in gliding}))
+landed = next((f for f in sorted(g) if f > 868 and g[f][7] == 0x02), None)
+check(landed is not None and landed + 2 in g and int.from_bytes(g[landed + 2][0x2C:0x2E], "big", signed=True) >= 0x200,
+      "landing from the glide keeps his speed (landed at %s)" % landed)
 
 sys.exit(1 if FAILED else 0)

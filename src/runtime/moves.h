@@ -40,7 +40,9 @@
 // Forward held (or nothing) he dives: he falls faster and gains speed. Back
 // held he pulls up: the speed he has becomes height, and the climb costs
 // speed until he levels out and sinks slowly; forward dives again. It ends
-// on the ground or when anything else takes him (a hit, a wall).
+// on the ground, where he runs on with the speed he had, or when anything
+// else takes him (a hit, a wall). The glide's five frames (Knuckles' 58-5C)
+// show how he climbs or falls: 58 a steep climb, 5A level, 5C a steep dive.
 //
 // It runs in the game's own glide state ($24, Knuckles'), which shows the
 // glide's frames and lands; the airborne state ($08) shows the ball whatever
@@ -91,7 +93,8 @@ inline constexpr int kDropDashSpeed = 0x0C00, kDropDashMax = 0x1000;
 inline constexpr int32_t kGlideStart = 0x30000, kGlideDiveFall = 0x2400, kGlideDivePush = 0x1400,
                          kGlideClimbFall = 0x1C00, kGlideClimbDrag = 0x0C00, kGlideMaxSpeed = 0xC0000,
                          kGlideMinSpeed = 0x10000, kGlideMaxFall = 0x80000, kGlideSink = 0x20000,
-                         kGlideOwnFall = 0x100;  // glide_fall_speed 1, as the game adds it
+                         kGlideOwnFall = 0x100,  // glide_fall_speed 1, as the game adds it
+                         kGlideLandMax = 0x0C00;  // ground speed (8.8) kept on landing, at most
 
 // The stomp's first speed, 16.16 px a frame ($999 in 8.8, the mod's value).
 inline constexpr int32_t kStompSpeed = 0x00099900;

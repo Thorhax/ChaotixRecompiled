@@ -242,6 +242,11 @@ glide_acceleration = 0
 glide_fall_speed = 1
 ```
 
+While he glides, the frame shown says how he climbs or falls: Knuckles' body
+frames 58 to 5C stand for a steep climb, a climb, level, a dive and a steep
+dive, so a pack draws those five poses there. Landing keeps the speed he had
+(up to 12 pixels a frame) instead of the stop Knuckles' glide ends with.
+
 A file with a `[Moves]` section sets its slot's whole set: a move it does
 not list is off for that slot, whatever the MIGHTY STOMP option (OPTIONS > GAMEPLAY) says. Without
 the section, Mighty's stomp follows that option and no other slot has a move.
