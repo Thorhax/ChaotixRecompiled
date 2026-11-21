@@ -43,7 +43,7 @@ class Machine;
 namespace savestate {
 
 // Bumped whenever the raw layout changes (a field added, moved or removed).
-constexpr uint32_t kFormatVersion = 4;  // 2: tether_called (issue #43); 3: move_state, 4: glide_fall (this fork)
+constexpr uint32_t kFormatVersion = 5;  // 2: tether_called (issue #43); 3: move_state, 4: glide_fall, 5: glide (this fork)
 
 // The output picture (framebuffer) is optional: a file keeps it so the
 // game is on screen at once after a load; rewind snapshots leave it out and

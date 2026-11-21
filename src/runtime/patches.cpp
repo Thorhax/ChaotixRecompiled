@@ -126,6 +126,7 @@ void m68k_hook(m68k::State* c, uint32_t pc) {
         tether::on_chars_update(*m);
         moves::on_chars_update(*m);  // this fork's extra moves (runtime/moves.h)
         return;
+    case moves::kCharsDone: moves::on_chars_done(*m); return;
     case tether::kForce: tether::on_force(*m, c); return;
     case tether::kPartnerSide: tether::on_partner_side(*m, c); return;
     case tether::kClampBefore: tether::on_clamp_before(*m, c); return;

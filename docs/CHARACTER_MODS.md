@@ -232,14 +232,15 @@ Two moves the game never had can be given to a slot:
 [Moves]
 stomp = 1       ; jump again in the air to drop straight down
 drop_dash = 1   ; in a jump, hold jump again; landing starts a roll
-ray_glide = 1   ; jump again in the air to glide: forward dives, back pulls up
+ray_glide = 1   ; jump again in the air and hold it to glide: forward dives, back pulls up
 hammer = 1      ; jump again in the air swings a hammer around the character
 ```
 
 `hammer` is Amy's hammer spin from Sonic Origins Plus. It goes with
 `drop_dash` or alone. For 24 frames the character is still the ball the
-jump is, so it hits what a jump hits; the swing is its look, and the pack
-draws it: the body's sheet (`32x_<bank>.txt`) gets eight extra frames, 80
+jump is, so it hits what a jump hits, and reaches 12 pixels further each way
+(for everything that tests for a touch with the character; rings are picked
+up by other code and are not). The pack draws the swing: the body's sheet (`32x_<bank>.txt`) gets eight extra frames, 80
 to 87, each shown for three frames in place of the ball. An extra frame's
 line gives a box of one point (`frame 80 X Y W H 0 1 0 0`) and its picture is
 placed from the cell's hotspot. Without those frames the ball is shown.
@@ -257,10 +258,14 @@ glide_acceleration = 0
 glide_fall_speed = 1
 ```
 
-While he glides, the frame shown says how he climbs or falls: Knuckles' body
-frames 58 to 5C stand for a steep climb, a climb, level, a dive and a steep
-dive, so a pack draws those five poses there. Landing keeps the speed he had
-(up to 12 pixels a frame) instead of the stop Knuckles' glide ends with.
+The glide follows the routine of the Sonic 3 hack it was read from: it lasts
+while jump is held; forward dives (he falls with all his weight and gains
+speed), back pulls up (a fast dive throws him upwards, each pull a little
+less), and with neither held at the start he pulls up at once. The frame
+shown says how his nose points: Knuckles' body frames 58 to 5C stand for all
+the way up, up, level, down and all the way down, so a pack draws those five
+poses there. Landing keeps the speed he had (up to 12 pixels a frame)
+instead of the stop Knuckles' glide ends with.
 
 A file with a `[Moves]` section sets its slot's whole set: a move it does
 not list is off for that slot, whatever the MIGHTY STOMP option (OPTIONS > GAMEPLAY) says. Without

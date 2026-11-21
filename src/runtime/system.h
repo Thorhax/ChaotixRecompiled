@@ -248,6 +248,11 @@ public:
     uint8_t move_sets[8] = {};
     uint8_t move_state[2] = {};
     int32_t glide_fall[2] = {};  // Ray's glide: its fall speed, 16.16 px a frame (runtime/moves.h)
+    // The rest of that glide (save state format 5): how the nose points
+    // (0x10 down to 0x70 up), how strong the next pull is, the climb a pull
+    // still owes, and the speed in store (8.8 px a frame).
+    struct Glide { int16_t pitch = 0, boost = 0, impulse = 0, speed = 0; };
+    Glide glide[2] = {};
     // FOLLOW's note of where the player stood before the game put one of the
     // two back on the tether's circle; used and dropped by the next
     // instruction's hook, within the same routine, so never in a save state.

@@ -35,14 +35,19 @@
 // game's own sounds are asked for with it: the spin dash's charge ($6C) when
 // the dash is charged and its release ($3C) on landing.
 //
-// RAY'S GLIDE (Sonic Mania Plus): jump pressed again in a jump sets him
-// gliding the way he faces, at 3 px a frame or his own speed if that is more.
-// Forward held (or nothing) he dives: he falls faster and gains speed. Back
-// held he pulls up: the speed he has becomes height, and the climb costs
-// speed until he levels out and sinks slowly; forward dives again. It ends
-// on the ground, where he runs on with the speed he had, or when anything
-// else takes him (a hit, a wall). The glide's five frames (Knuckles' 58-5C)
-// show how he climbs or falls: 58 a steep climb, 5A level, 5C a steep dive.
+// RAY'S GLIDE (Sonic Mania Plus, as the Sonic 3 hack "Sonic 3 Unlocked" has it:
+// its routine, read from its code, is followed step by step): jump pressed
+// again in a jump sets him gliding the way he faces, at 3 px a frame or 7/8 of
+// his own speed if that is more, for as long as jump is held. His nose swings
+// between down and up, a step a frame. Nose down he falls with all his weight
+// and gains speed; nose up he floats and loses it. Forward held (once the nose
+// is up) dives; back held (once it is down) pulls up, and a fast dive or the
+// first pull throws him upwards by 13/16 of his speed, each pull a little
+// weaker. With nothing held at the start he pulls up at once, at half speed.
+// It ends on the ground, where he runs on with the speed he had, when jump is
+// let go (he drops as a ball), or when anything else takes him (a hit, a
+// wall). The glide's five frames (Knuckles' 58-5C) show the nose: 58 all the
+// way up, 5A level, 5C all the way down.
 //
 // It runs in the game's own glide state ($24, Knuckles'), which shows the
 // glide's frames and lands; the airborne state ($08) shows the ball whatever
@@ -58,8 +63,9 @@
 //
 // HAMMER (Amy's hammer spin, as in Sonic Origins Plus): jump pressed again in
 // a jump swings the hammer around her for kHammerFrames frames. She is the
-// ball the jump already is for that time, so it hits what a jump hits; the
-// swing is its look, drawn from the pack's extra frames (extra_frame). The
+// ball the jump already is for that time, so it hits what a jump hits, and
+// kHammerReach pixels further each way (on_chars_done); the swing's look is
+// drawn from the pack's extra frames (extra_frame). The
 // frames left are kept in Machine::glide_fall, which a character with the
 // glide uses for the glide and no other does.
 #pragma once
@@ -88,20 +94,20 @@ enum : uint8_t {
     kDashCount = 0xFC,     // frames jump has been held again, x 4
     // Ray's glide (a character with it has neither of the moves above).
     kGlideOn = 0x04,
-    kGlideUp = 0x08,       // climbing or levelling out, not diving
+    kGlideDive = 0x08,     // the nose is going down (else up)
     kGlideLeft = 0x10,     // the way it went off
+    kGlideBack = 0x20,     // leaning back: the last of left and right held was against the way he goes
 };
 
 // Drop dash: frames of holding before it is charged, and its speeds (8.8).
 inline constexpr int kDropDashCharge = 20;
 inline constexpr int kDropDashSpeed = 0x0C00, kDropDashMax = 0x1000;
 
-// Ray's glide, 16.16 px a frame: the least speed it starts with, the dive's
-// pull and push, the climb's pull and drag, and the limits.
-inline constexpr int32_t kGlideStart = 0x30000, kGlideDiveFall = 0x2400, kGlideDivePush = 0x1400,
-                         kGlideClimbFall = 0x1C00, kGlideClimbDrag = 0x0C00, kGlideMaxSpeed = 0xC0000,
-                         kGlideMinSpeed = 0x10000, kGlideMaxFall = 0x80000, kGlideSink = 0x20000,
-                         kGlideOwnFall = 0x100,  // glide_fall_speed 1, as the game adds it
+// Ray's glide, 8.8 px a frame as its original: the least speed it starts
+// with and goes at, the fastest climb and fall, and (16.16) the game's own
+// fall in that state.
+inline constexpr int kGlideStart = 0x300, kGlideMinSpeed = 0x100, kGlideMaxClimb = 0x600, kGlideMaxFall = 0x1000;
+inline constexpr int32_t kGlideOwnFall = 0x100,  // glide_fall_speed 1, as the game adds it
                          kGlideLandMax = 0x0C00;  // ground speed (8.8) kept on landing, at most
 
 // The hammer: how long a swing shows, and its frames in a pack's body sheet
@@ -118,6 +124,16 @@ bool any(const Machine& m);
 // (1), whose body is bank `bank`, in place of the frame the game draws; -1
 // for none. Read by the sprite recorder: it changes the picture only.
 int extra_frame(const Machine& m, int who, int bank);
+
+// The game's frame goes: the characters ($889C10), then everything else,
+// starting at $88804A. What else there is tests for a touch with each
+// character's half-size (object bytes +$22, +$23, which the characters' own
+// code writes again every frame from the frame shown). Here, with the
+// characters done, a swinging hammer makes its character that much larger for
+// the rest of the frame: it reaches what the hammer reaches.
+inline constexpr uint32_t kCharsDone = 0x88804A;
+inline constexpr int kHammerReach = 12;  // pixels, each way
+void on_chars_done(Machine& m);
 
 // The hook (called from patches::m68k_hook at tether::kCharsUpdate).
 void on_chars_update(Machine& m);

@@ -127,6 +127,7 @@ constexpr uint32_t kSceneLevel = 0xDFF4;
 // Sorted: the interpreter binary-searches this list.
 inline constexpr uint32_t kM68kHooks[] = {
     kObjectScreenXY, kRingCullLo, kRingCullHi, kRingCullDone, kRingCullExit, kPiecesDone, kModeDispatch,
+    0x88804A,  // moves::kCharsDone (runtime/moves.h, this fork)
     kFullRedrawA, kRowsA_X, kFullRedrawB, kRowsB_X, kPlaneUpdateA, kRowUpA_X, kRowDownA_X,
     kColLeftA_X, kColRightA_X, kPlaneUpdateB, kColLeftB_X, kColRightB_X, kRowUpB_X, kRowDownB_X,
     kCamClampMax, kCamClampMin, kCamClampBottom,

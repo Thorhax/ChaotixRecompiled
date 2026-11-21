@@ -28,6 +28,7 @@ constexpr uint32_t kCharacterId[2] = {0xE038, 0xE03A};  // word: character x 4
 constexpr uint32_t kObjState = 0x07;
 constexpr uint32_t kObjXVel = 0x18, kObjYVel = 0x1C;  // 16.16
 constexpr uint32_t kObjAnim = 0x26;
+constexpr uint32_t kObjHalfWidth = 0x22, kObjHalfHeight = 0x23;  // bytes, pixels
 constexpr uint8_t kStateGround = 0x02, kStateJump = 0x04, kStateRoll = 0x06, kStateFall = 0x08;
 constexpr uint16_t kAnimBall = 0x12;
 
@@ -124,12 +125,30 @@ constexpr uint8_t kStateGlide = 0x24;
 constexpr uint32_t kObjY = 0x0C;          // long, 16.16
 constexpr uint32_t kObjAnimFrame = 0x28;  // 8.8
 
+// 256 x the sine of 0, 4, ... 64 of the 256 steps in a circle, as the game the glide is from has it.
+constexpr int16_t kSine[17] = {0, 25, 49, 74, 97, 120, 142, 162, 181, 197, 212, 225, 236, 244, 251, 254, 256};
+// The sine and cosine of an angle that is a multiple of 4 steps, -64 to 64.
+int sine(int a) { return a < 0 ? -kSine[-a / 4] : kSine[a / 4]; }
+int cosine(int a) { return kSine[(64 - (a < 0 ? -a : a)) / 4]; }
+
 void ray_glide(Machine& m, int who, uint32_t obj, uint32_t pad) {
     uint8_t& now = m.move_state[who];
-    int32_t& fall = m.glide_fall[who];
+    Machine::Glide& g = m.glide[who];
+    int32_t& fall = m.glide_fall[who];  // 16.16; the routine below works in 8.8 like its original
     uint8_t& state = m.wram[(obj + kObjState) & 0xFFFF];
     uint8_t& held = m.wram[(pad + 2) & 0xFFFF];
     uint8_t& flags = m.wram[(obj + kObjFlags) & 0xFFFF];
+    // Left or right held sets which way he leans: back (up) or forward (down).
+    const auto lean = [&](bool left) {
+        if (!(held & kLeftRight)) return;
+        const bool forward = (held & (left ? 0x04 : 0x08)) != 0;
+        now = uint8_t(forward ? now & ~kGlideBack : now | kGlideBack);
+    };
+    // The climb a pull gives: 13/16 of his speed, upwards.
+    const auto pull = [](int xv) {
+        const int d = xv < 0 ? xv : -xv;
+        return (d >> 1) + (d >> 2) + (d >> 4);
+    };
     if (!(now & kGlideOn)) {
         now = 0;
         uint8_t& pressed = m.wram[(pad + 3) & 0xFFFF];
@@ -137,18 +156,26 @@ void ray_glide(Machine& m, int who, uint32_t obj, uint32_t pad) {
         if (!in_air || rd16(m, obj + kObjAnim) != kAnimBall || !(pressed & kJump)) return;
         pressed &= uint8_t(~kJump);
         const bool left = (flags & 0x08) != 0;
-        now = uint8_t(kGlideOn | (left ? kGlideLeft : 0));
-        const int32_t vx = int32_t(rd32(m, obj + kObjXVel));
-        const int32_t speed = std::max(left ? -vx : vx, kGlideStart);
-        fall = int32_t(rd32(m, obj + kObjYVel));
-        if (held & (left ? 0x08 : 0x04)) {  // back held: up at once
-            now |= kGlideUp;
-            fall = std::min(fall, -(speed / 2) - 0x10000);
+        // It starts leaning back and diving; forward held starts the dive
+        // as it is, anything else pulls up at once.
+        now = uint8_t(kGlideOn | kGlideDive | kGlideBack | (left ? kGlideLeft : 0));
+        int xv = int32_t(rd32(m, obj + kObjXVel)) >> 8;
+        xv -= xv >> 3;
+        if ((left ? -xv : xv) < kGlideStart) xv = left ? -kGlideStart : kGlideStart;
+        lean(left);
+        g = Machine::Glide{};
+        if (now & kGlideBack) {
+            now &= uint8_t(~kGlideDive);
+            xv >>= 1;
+            g.impulse = int16_t(pull(xv));
         }
-        wr32(m, obj + kObjXVel, uint32_t(left ? -speed : speed));
+        fall = (int32_t(rd32(m, obj + kObjYVel)) >> 1) & ~0xFF;
+        g.pitch = 0x40;
+        g.boost = 0x40;
+        g.speed = int16_t(xv < 0 ? -xv : xv);
+        wr32(m, obj + kObjXVel, uint32_t(xv * 256));
         state = kStateGlide;
         wr16(m, obj + kObjAnim, kAnimGlide);
-        wr16(m, obj + kObjAnimFrame, 0);
         LOGD("moves", "glide: character %d", who);
     } else if (state != kStateGlide) {
         // The ground, a hit, a wall: over. That state's code takes hold of a
@@ -168,42 +195,70 @@ void ray_glide(Machine& m, int who, uint32_t obj, uint32_t pad) {
         return;
     } else {
         const bool left = (now & kGlideLeft) != 0;
-        const int32_t vx = int32_t(rd32(m, obj + kObjXVel));
-        int32_t speed = left ? -vx : vx;
-        if (speed < kGlideMinSpeed / 2) {
-            // Stopped dead by something in the way: he drops.
+        int xv = int32_t(rd32(m, obj + kObjXVel)) >> 8;
+        int yv = fall >> 8;
+        // Stopped dead by something in the way, or jump let go: he drops.
+        if ((left ? -xv : xv) < kGlideMinSpeed / 2 || !(held & kJump)) {
             now = 0;
             state = kStateFall;
-            wr32(m, obj + kObjYVel, uint32_t(std::max(fall, 0)));
+            wr16(m, obj + kObjAnim, kAnimBall);
+            wr32(m, obj + kObjYVel, uint32_t(fall));
             return;
         }
-        const bool back = (held & (left ? 0x08 : 0x04)) != 0, forward = (held & (left ? 0x04 : 0x08)) != 0;
-        if (now & kGlideUp) {
-            if (forward) {
-                now &= uint8_t(~kGlideUp);
-            } else {
-                fall = std::min(fall + kGlideClimbFall, kGlideSink);
-                if (fall < 0) speed = std::max(speed - kGlideClimbDrag, kGlideMinSpeed);
+        // The nose: down to 0x10 in a dive, up to 0x70 out of one.
+        if (now & kGlideDive) { if (g.pitch > 0x10) g.pitch -= 8; }
+        else if (g.pitch < 0x70) g.pitch += 8;
+        if (g.impulse) {
+            // A pull's climb comes on over a few frames.
+            yv += g.impulse >> 2;
+            if (g.impulse > yv) { yv = g.impulse; g.impulse = 0; }
+        } else {
+            // His weight: all of it nose down, little of it nose up.
+            yv += (cosine(g.pitch / 2) * 2 * 0x38) >> 9;
+        }
+        yv = std::max(yv, -kGlideMaxClimb);
+        if (!(now & kGlideDive) && yv > 0x100) yv -= yv >> 2;
+        yv = std::min(yv, kGlideMaxFall);
+        // Forward: gained nose down, lost nose up, and never more than the
+        // speed he has in store, which the fall of a dive fills.
+        const int push = (sine(0x50 - g.pitch) * 0x16) >> 8;
+        int store = g.speed;
+        if (yv <= 0) {
+            g.speed = int16_t(g.speed - push);
+            if (store <= 0x400) g.speed = int16_t(store = 0x400);
+        } else if (store < yv) {
+            g.speed = int16_t(store = yv - (yv >> 6));
+        }
+        if (xv) {
+            if (left) xv = std::max(std::min(xv - push, -kGlideMinSpeed), -store);
+            else xv = std::min(std::max(xv + push, int(kGlideMinSpeed)), store);
+        }
+        lean(left);
+        if (!(now & kGlideBack)) {
+            // Forward, once the nose is all the way up: the dive.
+            if (g.pitch == 0x70 && !(now & kGlideDive)) {
+                now |= kGlideDive;
+                g.impulse = 0;
+            }
+        } else if (g.pitch == 0x10 && (now & kGlideDive)) {
+            // Back, once the nose is all the way down: he pulls up, and a
+            // dive fast enough (or the first pull) throws him upwards, each
+            // time a little less.
+            now &= uint8_t(~kGlideDive);
+            if (yv > 0x280 || g.boost == 0x40) {
+                g.impulse = int16_t(std::max((pull(xv) * (g.boost * 4)) >> 8, -kGlideMaxClimb));
+                if (g.boost > 4) g.boost -= 8;
             }
         }
-        if (!(now & kGlideUp)) {
-            if (back && speed > kGlideMinSpeed + 0x8000) {
-                // Pull up: the speed he has, and half the fall, become height.
-                now |= kGlideUp;
-                fall = -std::clamp(speed * 3 / 4 + std::max(fall, 0) / 2, 0x20000, 0x90000);
-            } else {
-                fall = std::min(fall + kGlideDiveFall, kGlideMaxFall);
-                speed = std::min(speed + kGlideDivePush, kGlideMaxSpeed);
-            }
-        }
-        wr32(m, obj + kObjXVel, uint32_t(left ? -speed : speed));
+        fall = yv * 256;
+        wr32(m, obj + kObjXVel, uint32_t(xv * 256));
         flags = uint8_t(left ? flags | 0x08 : flags & ~0x08);
     }
     // The pose: the glide's animation ($40) has five frames (Knuckles' 58-5C,
-    // which his own glide runs through once); here the frame says how he
-    // climbs or falls, from a steep climb to a steep dive. The game's step
+    // which his own glide runs through once); here the frame says how the
+    // nose points, from all the way up to all the way down. The game's step
     // adds a quarter of a frame to what is written, which stays in the frame.
-    const int pose = fall < -0x28000 ? 0 : fall < -0x8000 ? 1 : fall < 0x14000 ? 2 : fall < 0x30000 ? 3 : 4;
+    const int pose = g.pitch >= 0x70 ? 0 : g.pitch >= 0x58 ? 1 : g.pitch >= 0x40 ? 2 : g.pitch >= 0x28 ? 3 : 4;
     wr16(m, obj + kObjAnimFrame, uint16_t(pose << 8));
     // The state's code moves him by the X velocity and by its own small fall:
     // the rest of the fall is added to where he is.
@@ -228,6 +283,21 @@ void hammer(Machine& m, int who, uint32_t obj, uint32_t pad) {
 }
 
 } // namespace
+
+void on_chars_done(Machine& m) {
+    if (rd16(m, patches::kGameMode) != kModeLevel) return;
+    const uint32_t objs[2] = {rd16(m, tether::kPlayerObj), rd16(m, tether::kPartnerObj)};
+    for (int who = 0; who < 2; ++who) {
+        const unsigned character = (rd16(m, kCharacterId[who]) >> 2) & 7;
+        const uint8_t set = m.move_sets[character];
+        if (!objs[who] || !(set & kHammer) || (set & kRayGlide) || m.glide_fall[who] <= 0) continue;
+        if (who == 1 && objs[1] == objs[0]) continue;
+        for (uint32_t at : {kObjHalfWidth, kObjHalfHeight}) {
+            uint8_t& size = m.wram[(objs[who] + at) & 0xFFFF];
+            size = uint8_t(std::min(int(size) + kHammerReach, 0x7F));
+        }
+    }
+}
 
 int extra_frame(const Machine& m, int who, int bank) {
     if (rd16(m, patches::kGameMode) != kModeLevel) return -1;
