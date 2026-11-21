@@ -5,8 +5,8 @@
 //   video is MPEG-1 (thorhax_intro.mpg, decoded by pl_mpeg) and the sound raw 48 kHz stereo PCM (thorhax_intro.pcm),
 //   both linked into the executable; make_intro.sh makes them from the source video. A decode thread on core 1 keeps a
 //   few frames ahead in a small queue. The player thread (core 2) shows the frame due at the audio clock (samples
-//   audout has played), converting it to RGBA straight into a linear libnx framebuffer; a frame that is already late
-//   is dropped rather than shown late. Afterwards the framebuffer and audout are closed and the output is released:
+//   audout has played), converting it to RGBA straight into an SDL streaming texture; a frame that is already late
+//   is dropped rather than shown late. Afterwards the window and audout are closed and the output is released:
 //   the game's window gets its Vulkan swapchain and its audio output opens the device.
 
 #include "thorhax_intro.h"
@@ -25,6 +25,8 @@
 #include <rex/logging.h>
 
 #include <switch.h>
+
+#include <SDL2/SDL.h>
 
 #include "pl_mpeg.h"
 
@@ -65,7 +67,7 @@ constexpr u64 kSecretSkip = HidNpadButton_Minus | HidNpadButton_Plus;
 constexpr u64 kSkipButtons = HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y |
                              HidNpadButton_Plus | HidNpadButton_Minus | HidNpadButton_L | HidNpadButton_R |
                              HidNpadButton_ZL | HidNpadButton_ZR;
-// The framebuffer is the size of the default window; the system scales it to the docked output.
+// The picture is the size of the default window; the system scales it to the docked output.
 constexpr u32 kWidth = 1280;
 constexpr u32 kHeight = 720;
 // Decoded frames kept ahead of the display: room for the slower intra frames.
@@ -226,19 +228,56 @@ struct Audio {
   }
 };
 
-// Fills the whole (linear) framebuffer with opaque black and shows it. pl_mpeg's RGBA conversion leaves the alpha
-// bytes alone, so this also makes every later frame opaque.
-void ShowBlack(Framebuffer& fb) {
-  u32 stride = 0;
-  auto* pixels = static_cast<u8*>(framebufferBegin(&fb, &stride));
-  for (u32 row = 0; row < kHeight; ++row) {
-    auto* line = reinterpret_cast<u32*>(pixels + size_t(row) * stride);
-    std::fill(line, line + kWidth, 0xFF000000u);
-  }
-  framebufferEnd(&fb);
-}
+// The picture: an SDL window, renderer and streaming texture (Chaotix: a libnx framebuffer on the default window, closed
+// before SDL took the window over, left the system's display holding memory after the program ended, and the homebrew
+// menu loaded next crashed drawing its first frame). SDL's video stays initialised for the game afterwards.
+struct Screen {
+  SDL_Window* window = nullptr;
+  SDL_Renderer* renderer = nullptr;
+  SDL_Texture* texture = nullptr;
 
-// The intro's own thread: everything from opening the framebuffer to giving the output back.
+  bool Open() {
+    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) return false;
+    window = SDL_CreateWindow("", 0, 0, int(kWidth), int(kHeight), 0);
+    if (window) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    if (renderer) {
+      texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, int(kWidth),
+                                  int(kHeight));
+    }
+    if (!texture) {
+      Close();
+      return false;
+    }
+    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE);
+    return true;
+  }
+  void Close() {
+    if (texture) SDL_DestroyTexture(texture);
+    if (renderer) SDL_DestroyRenderer(renderer);
+    if (window) SDL_DestroyWindow(window);
+    texture = nullptr;
+    renderer = nullptr;
+    window = nullptr;
+  }
+  // Opaque black, shown.
+  void ShowBlack() {
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+    SDL_RenderPresent(renderer);
+  }
+  // A decoded frame, converted straight into the texture (pl_mpeg leaves the alpha bytes alone; blending is off).
+  void Show(plm_frame_t* frame) {
+    void* pixels = nullptr;
+    int pitch = 0;
+    if (SDL_LockTexture(texture, nullptr, &pixels, &pitch) != 0) return;
+    plm_frame_to_rgba(frame, static_cast<uint8_t*>(pixels), pitch);
+    SDL_UnlockTexture(texture);
+    SDL_RenderCopy(renderer, texture, nullptr, nullptr);
+    SDL_RenderPresent(renderer);
+  }
+};
+
+// The intro's player: everything from opening the window to giving the output back.
 void PlayerMain(void*) {
   const u64 started = armGetSystemTick();
   auto seconds_since = [](u64 tick) { return double(armTicksToNs(armGetSystemTick() - tick)) / 1e9; };
@@ -268,21 +307,15 @@ void PlayerMain(void*) {
     slot.cr = std::make_unique<uint8_t[]>(luma / 4);
   }
 
-  Framebuffer fb{};
-  Result rc = framebufferCreate(&fb, nwindowGetDefault(), kWidth, kHeight, PIXEL_FORMAT_RGBA_8888, 2);
-  if (R_SUCCEEDED(rc)) {
-    rc = framebufferMakeLinear(&fb);
-    if (R_FAILED(rc)) {
-      framebufferClose(&fb);
-    }
-  }
-  if (R_FAILED(rc)) {
-    REXLOG_WARN("intro: no framebuffer: 0x{:08X}", rc);
+  Screen screen;
+  Result rc = 0;
+  if (!screen.Open()) {
+    REXLOG_WARN("intro: no window: {}", SDL_GetError());
     plm_destroy(decoder->plm);
     RexSwitchReleaseOutput();
     return;
   }
-  ShowBlack(fb);
+  screen.ShowBlack();
 
   hidInitialize();
   padConfigureInput(8, HidNpadStyleSet_NpadStandard);
@@ -298,7 +331,8 @@ void PlayerMain(void*) {
   }
   if (R_FAILED(rc)) {
     REXLOG_WARN("intro: no decode thread: 0x{:08X}", rc);
-    framebufferClose(&fb);
+    hidExit();
+    screen.Close();
     plm_destroy(decoder->plm);
     RexSwitchReleaseOutput();
     return;
@@ -334,6 +368,7 @@ void PlayerMain(void*) {
       break;
     }
     audio.Pump();
+    SDL_PumpEvents();  // the system's messages (HOME, sleep)
 
     // The newest decoded frame that is due. In the background (HOME, sleep) nothing is shown; the system suspends
     // the process soon after anyway.
@@ -343,10 +378,7 @@ void PlayerMain(void*) {
     if (next < ready && next <= due && appletGetFocusState() == AppletFocusState_InFocus) {
       const uint32_t pick = std::min(due, ready - 1);
       dropped += pick - next;
-      u32 stride = 0;
-      auto* pixels = static_cast<u8*>(framebufferBegin(&fb, &stride));
-      plm_frame_to_rgba(&decoder->slots[pick % kSlots].frame, pixels, int(stride));
-      framebufferEnd(&fb);
+      screen.Show(&decoder->slots[pick % kSlots].frame);
       ++shown;
       decoder->read.store(pick + 1, std::memory_order_release);
       continue;
@@ -365,8 +397,11 @@ void PlayerMain(void*) {
   threadWaitForExit(&decoder->thread);
   threadClose(&decoder->thread);
   audio.Close();
-  ShowBlack(fb);
-  framebufferClose(&fb);
+  // Balances the hidInitialize above. Left open, the input service's shared memory stayed mapped after the program
+  // ended, and the homebrew menu loaded next into the same process crashed drawing its first frame.
+  hidExit();
+  screen.ShowBlack();
+  screen.Close();
   plm_destroy(decoder->plm);
   // The game's swapchain and audio from here on.
   RexSwitchReleaseOutput();
@@ -396,6 +431,13 @@ void Start() {
   }
 }
 
+void Play() {
+  // As Start, but on the calling thread (the main thread: SDL's window and renderer belong to it), returning when the
+  // intro has ended.
+  RexSwitchHoldOutput();
+  PlayerMain(nullptr);
+}
+
 }  // namespace thorhax::intro
 
 #else
@@ -403,6 +445,7 @@ void Start() {
 namespace thorhax::intro {
 
 void Start() {}
+void Play() {}
 
 }  // namespace thorhax::intro
 

@@ -27,6 +27,9 @@ public:
     struct Hooks {
         std::function<void()> apply_video;  // window mode / filter changed
         std::function<void()> quit;
+        // This fork: ends the program and starts it again (the Switch), for a
+        // change that is read as the game starts; empty where it cannot.
+        std::function<void()> restart;
         // Hands control to the game's own front end, as pressing Start on the
         // title screen would have done.
         std::function<void()> start_game;
@@ -226,7 +229,8 @@ private:
     // OPTIONS is a list of categories; each category is a page of its own, so
     // that no page runs off a phone's screen.
     enum class Page { Closed, Front, Main, Options, Video, Sound, Input, Extras, Controls, Keys, TimeAttack,
-                      Achievements, Cheats, States, StateKeys, Lobby, Mods, ModInfo, Music, Speedrun, Tether, Netplay, LevelSelect };
+                      Achievements, Cheats, States, StateKeys, Lobby, Mods, ModInfo, Music, Speedrun, Tether, Netplay, LevelSelect,
+                      Characters };
 
     struct Item {
         std::string label;
@@ -255,6 +259,8 @@ private:
     void build_front();
     void build_main();
     void build_options();
+    void build_characters();  // this fork: EXTRA CHARACTERS, the packs that replace characters
+    void add_restart_row();   // this fork: RESTART NOW, when a mod change needs it
     void build_video();
     void build_sound();
     void build_input();

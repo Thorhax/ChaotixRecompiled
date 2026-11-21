@@ -157,6 +157,9 @@ struct App {
     bool touch_enabled = false;
     std::map<SDL_FingerID, uint16_t> fingers;
     bool running = true;
+    bool menu_hooks_restart = false;  // the menu offers RESTART NOW
+    bool restart = false;     // this fork: start again on exit (the Switch: the homebrew loader's next load)
+    std::string self_path;   // argv[0]
     bool fast_forward = false;
     FastForwardState ff_state;  // held or toggled (issue #45)
     int overlay_page = 0;
@@ -1888,7 +1891,7 @@ std::vector<std::string> mod_folders(const App& app, const char* kind) {
 void update_sprite_recorder(App& app) {
     // (The stomp's dust is drawn by the recorder: runtime/moves.h.)
     const bool effects = std::any_of(std::begin(app.m->move_sets), std::end(app.m->move_sets),
-                                     [](uint8_t s) { return (s & moves::kStomp) != 0; });
+                                     [](uint8_t s) { return (s & (moves::kStomp | moves::kDropDash)) != 0; });
     const bool want = app.sprite_pack || app.cfg.dump_graphics || app.cfg.smooth_start || effects;
     if (!want) app.sprites.reset();
     else if (!app.sprites) app.sprites = std::make_shared<SpriteRecorder>();
@@ -2405,6 +2408,7 @@ void draw_touch_controls(App& app, uint16_t held) {
 
 int main(int argc, char** argv) {
     App app;
+    if (argc > 0 && argv[0]) app.self_path = argv[0];
     // The game image is 4:3 or wider: ask mobile platforms for landscape.
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     // Android's back button or gesture comes to us as a key (issue #72) rather
@@ -2600,6 +2604,17 @@ int main(int argc, char** argv) {
             apply_window_mode(app);
         };
         hooks.quit = [&app] { app.running = false; };
+#ifdef __SWITCH__
+        // The homebrew loader starts the program named by envSetNextLoad
+        // when this one ends: this one again, with the new settings.
+        if (envHasNextLoad() && !app.self_path.empty())
+            hooks.restart = [&app] {
+                save_now(app);
+                app.restart = true;
+                app.running = false;
+            };
+        app.menu_hooks_restart = bool(hooks.restart);
+#endif
         hooks.start_game = [&app] {
             // Keep the title screen so BACK TO TITLE can return to it, then
             // give the game the Start it is waiting for: it proceeds into its
@@ -2761,11 +2776,15 @@ int main(int argc, char** argv) {
         // restart a character is half one and half the other (the new moves
         // with the old stats), so it is said where it cannot be missed.
         const auto restart_notice = [&app] {
-            if (app.packs_restart) notice(app, "MODS", "RESTART THE GAME", "FOR STATS AND PATCHES.");
+            if (app.packs_restart)
+                notice(app, "MODS", "RESTART THE GAME", app.menu_hooks_restart ? "RESTART NOW IS IN THE MENU." : "FOR STATS AND PATCHES.");
         };
         hooks.mods_changed = [&app, restart_notice] {
             if (app.m) app.packs_restart = game_signature(app) != app.packs_game_signature;
             restart_notice();
+            // Written at once: a game closed from the console's HOME menu
+            // next is not asked first, and the change is for its next start.
+            if (app.m) save_now(app);
         };
         hooks.reload_mods = [&app, mods_allowed, restart_notice] {
             if (!app.m || !mods_allowed) return;
@@ -2999,6 +3018,20 @@ int main(int argc, char** argv) {
         netplay_begin(app, false);
     }
     bool menu_was_open = app.menu.open();
+#ifdef __SWITCH__
+    // The console stops the program without a word when it is closed from
+    // the HOME menu: settings are written whenever it loses the focus (HOME,
+    // sleep) and when it is asked to exit. libnx calls this from SDL's event
+    // pump, on this thread.
+    static AppletHookCookie focus_cookie;
+    appletHook(&focus_cookie, [](AppletHookType hook, void* user) {
+        App& a = *static_cast<App*>(user);
+        if (!a.m) return;
+        if ((hook == AppletHookType_OnFocusState && appletGetFocusState() != AppletFocusState_InFocus) ||
+            hook == AppletHookType_OnExitRequest)
+            save_now(a);
+    }, &app);
+#endif
     while (app.running) {
 #ifdef __SWITCH__
         // HOME then Close, or leaving the homebrew menu's title: stop here,
@@ -3613,5 +3646,8 @@ int main(int argc, char** argv) {
     SDL_DestroyRenderer(app.renderer);
     SDL_DestroyWindow(app.window);
     SDL_Quit();
+#ifdef __SWITCH__
+    if (app.restart) envSetNextLoad(app.self_path.c_str(), app.self_path.c_str());
+#endif
     return 0;
 }

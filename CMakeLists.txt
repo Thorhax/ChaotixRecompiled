@@ -319,7 +319,7 @@ if(CHAOTIX_BUILD_FRONTEND)
         nx_generate_nacp(
             OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nacp"
             NAME "Knuckles' Chaotix Recompiled"
-            AUTHOR "YuutaTsubasa, Switch port by Thorhax"
+            AUTHOR "Thorhax"
             VERSION "${CHAOTIX_SWITCH_VERSION}")
         nx_create_nro(chaotix
             OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nro"

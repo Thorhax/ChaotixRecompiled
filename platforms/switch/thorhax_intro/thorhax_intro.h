@@ -13,4 +13,8 @@ namespace thorhax::intro {
 // any time.
 void Start();
 
+// The same on the calling thread, returning when it has ended (a program with nothing to boot meanwhile). Its picture
+// is an SDL window (SDL's video stays initialised afterwards), so call it on the thread that will use SDL.
+void Play();
+
 }  // namespace thorhax::intro

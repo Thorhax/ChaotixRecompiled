@@ -1060,7 +1060,7 @@ int main(int argc, char** argv) {
     }
     if (sprite_pack || !dump_tiles_dir.empty()) want_sprites = true;
     // The stomp's dust is drawn by the recorder (runtime/moves.h).
-    const bool stomp_effects = std::any_of(std::begin(move_sets), std::end(move_sets), [](uint8_t s) { return (s & moves::kStomp) != 0; });
+    const bool stomp_effects = std::any_of(std::begin(move_sets), std::end(move_sets), [](uint8_t s) { return (s & (moves::kStomp | moves::kDropDash)) != 0; });
     if (stomp_effects) want_sprites = true;
     if (want_sprites) {
         m->sprites = std::make_shared<SpriteRecorder>();

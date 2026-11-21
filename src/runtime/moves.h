@@ -33,7 +33,8 @@
 // second and still held on landing, the character leaves the ground rolling
 // at 12 px a frame (more if it was already moving that way, up to 16), the way
 // it faces or the way left or right is held. Letting go before landing drops
-// the charge. Ground speed is the object's word +$2C (8.8 px a frame), counted
+// the charge. Dust is left behind where it sets off (as the stomp's, in the
+// picture only). Ground speed is the object's word +$2C (8.8 px a frame), counted
 // forward, the way the character faces: bit 3 of byte +$25 is set while it
 // faces left (docs/RING_TETHER.md). The
 // game's own sounds are asked for with it: the spin dash's charge ($6C) when

@@ -69,7 +69,7 @@ void stomp(Machine& m, int who, uint32_t obj, uint32_t pad) {
             // feet (both only in the picture).
             m.shake = kStompShakeFrames;
             m.stomp_dust = Machine::StompDust{true, m.frame_count, int16_t(rd16(m, obj + kObjX)),
-                                              int16_t(rd16(m, obj + kObjY)) + m.wram[(obj + kObjHalfHeight) & 0xFFFF]};
+                                              int16_t(rd16(m, obj + kObjY)) + m.wram[(obj + kObjHalfHeight) & 0xFFFF], 0};
         }
         return;
     }
@@ -126,6 +126,10 @@ void drop_dash(Machine& m, int who, uint32_t obj, uint32_t pad) {
     wr16(m, obj + kObjGroundSpeed, uint16_t(speed));
     wr32(m, obj + kObjXVel, uint32_t(int32_t(left ? -speed : speed) * 256));
     flags = uint8_t(left ? flags | 0x08 : flags & ~0x08);
+    // As in Sonic Mania, dust is left behind where it set off (picture only).
+    m.stomp_dust = Machine::StompDust{true, m.frame_count, int16_t(rd16(m, obj + kObjX)),
+                                      int16_t(rd16(m, obj + kObjY)) + m.wram[(obj + kObjHalfHeight) & 0xFFFF],
+                                      int8_t(left ? 1 : -1)};
     m.wram[(obj + kObjState) & 0xFFFF] = kStateRoll;
     wr16(m, obj + kObjAnim, kAnimBall);
     post_sound(m, kSoundDashRelease);

@@ -252,7 +252,7 @@ void SpriteRecorder::set_effects(bool on) {
     update_layer();
 }
 
-// The stomp's dust: the game's own smoke puff (the level's explosion bank,
+// The stomp's dust (and the drop dash's, behind it): the game's own smoke puff (the level's explosion bank,
 // kDustBank, frames kDustFrame on), drawn small at the landing's two sides,
 // growing and drifting outward as it fades. Placed from the player's body as
 // this picture drew it, so it stays where the landing was as the camera moves.
@@ -283,6 +283,7 @@ void SpriteRecorder::add_effects(const Machine& m, SpriteList& list) {
     list.pool.insert(list.pool.end(), p, p + size);
     for (int side = -1; side <= 1; side += 2)
         for (int k = 0; k < 2; ++k) {
+            if (dust.side && side != dust.side) continue;
             SpriteDraw d = *body;
             d.graphic = d.source = ptr;
             d.flags = side < 0 ? 1u : 0u;

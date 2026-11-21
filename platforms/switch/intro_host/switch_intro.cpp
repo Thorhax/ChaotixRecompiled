@@ -23,8 +23,8 @@ extern "C" void RexSwitchReleaseOutput(void) { g_held.store(false, std::memory_o
 namespace chaotix {
 
 void play_switch_intro() {
-    thorhax::intro::Start();
-    while (g_held.load(std::memory_order_acquire)) svcSleepThread(5'000'000);
+    // On this thread: its window is SDL's, as the game's is.
+    thorhax::intro::Play();
 }
 
 }  // namespace chaotix

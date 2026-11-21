@@ -252,7 +252,8 @@ public:
     // states, as nothing the machine does depends on it): frames of screen
     // shake left, and the dust (where, in level pixels, and the frame it began).
     int shake = 0;
-    struct StompDust { bool on = false; uint64_t start = 0; int32_t x = 0, y = 0; } stomp_dust;
+    // (side: 0 both sides, -1 left only, +1 right only: the drop dash's is behind it.)
+    struct StompDust { bool on = false; uint64_t start = 0; int32_t x = 0, y = 0; int8_t side = 0; } stomp_dust;
     // The rest of that glide (save state format 5): how the nose points
     // (0x10 down to 0x70 up), how strong the next pull is, the climb a pull
     // still owes, and the speed in store (8.8 px a frame).

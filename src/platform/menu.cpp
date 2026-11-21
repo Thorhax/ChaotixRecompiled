@@ -100,7 +100,7 @@ bool Menu::is_list_page(Page p) {
            p == Page::TimeAttack || p == Page::Cheats || p == Page::Video || p == Page::Sound ||
            p == Page::Input || p == Page::Extras || p == Page::Lobby || p == Page::Mods || p == Page::ModInfo ||
            p == Page::Music || p == Page::Speedrun || p == Page::Netplay ||
-           p == Page::Tether || p == Page::LevelSelect;
+           p == Page::Tether || p == Page::LevelSelect || p == Page::Characters;
 }
 
 // Where BACK and Escape go from a page below another one.
@@ -109,6 +109,7 @@ Menu::Page Menu::parent_of(Page p) {
     case Page::Video: case Page::Sound: case Page::Input: case Page::Extras: return Page::Options;
     case Page::Cheats: case Page::Lobby: return Page::Extras;
     case Page::Tether: return Page::Options;
+    case Page::Characters: return Page::Options;
     case Page::Speedrun: return Page::Extras;
     case Page::Mods: return Page::Extras;
     case Page::ModInfo: return Page::Mods;
@@ -133,6 +134,7 @@ void Menu::set_page(Page p) {
     if (p == Page::Front) build_front();
     else if (p == Page::Main) build_main();
     else if (p == Page::Options) build_options();
+    else if (p == Page::Characters) build_characters();
     else if (p == Page::Video) build_video();
     else if (p == Page::Sound) build_sound();
     else if (p == Page::Input) build_input();
@@ -190,6 +192,7 @@ bool Menu::show_page(const std::string& name) {
     else if (name == "cheats") set_page(Page::Cheats);
     else if (name == "lobby") set_page(Page::Lobby);
     else if (name == "gameplay") set_page(Page::Tether);
+    else if (name == "characters") set_page(Page::Characters);
     else if (name == "speedrun") set_page(Page::Speedrun);
     else if (name == "netplay") set_page(Page::Netplay);
     else if (name == "controls") set_page(Page::Controls);
@@ -940,7 +943,76 @@ void Menu::build_options() {
     // Issue #43: how the game plays. A category of its own, as EXTRAS is as
     // long as a phone's screen allows.
     items_.push_back({"GAMEPLAY", {}, [this](int) { set_page(Page::Tether); }});
+    // This fork: the character packs, without going through EXTRAS > MODS.
+    items_.push_back({"EXTRA CHARACTERS", {}, [this](int) { set_page(Page::Characters); }});
     items_.push_back({"BACK", {}, [this](int) { const Page back = return_to_; set_page(back); }});
+}
+
+// This fork: EXTRA CHARACTERS. The mod packs that replace characters (those
+// MODS lists with the characters in brackets), switched on and off here as
+// there; turning one on turns off the others for the same character. Their
+// pictures and moves change on leaving the page, their stats when the game
+// starts again (RESTART TO FINISH quits it for that).
+void Menu::build_characters() {
+    items_.clear();
+    bool any = false;
+    if (std::vector<mod_packs::Pack>* list = packs()) {
+        for (size_t i = 0; i < list->size(); ++i) {
+            const mod_packs::Pack& p = (*list)[i];
+            if (p.loose || p.replaces.empty()) continue;
+            any = true;
+            // The character it replaces in brackets, as large as the name: AMY (MIGHTY).
+            std::string label = upper(p.title()) + " (";
+            for (size_t k = 0; k < p.replaces.size(); ++k) label += (k ? ", " : "") + p.replaces[k];
+            label += ")";
+            items_.push_back({label,
+                              [this, i] {
+                                  const std::vector<mod_packs::Pack>* l = packs();
+                                  return l && i < l->size() && (*l)[i].enabled ? std::string("ON") : std::string("OFF");
+                              },
+                              [this, i](int step) {
+                                  std::vector<mod_packs::Pack>* l = packs();
+                                  if (!l || i >= l->size() || !cfg_) return;
+                                  const bool on = !(*l)[i].enabled;
+                                  // One pack per character: the others for the same one go off. (Indices are kept
+                                  // by the list's order, which switching does not change.)
+                                  const std::vector<std::string> mine = (*l)[i].replaces;
+                                  if (on)
+                                      for (size_t j = 0; j < l->size(); ++j) {
+                                          if (j == i || !(*l)[j].enabled) continue;
+                                          bool same = false;
+                                          for (const auto& r : (*l)[j].replaces)
+                                              same = same || std::find(mine.begin(), mine.end(), r) != mine.end();
+                                          if (same) mod_packs::set_enabled(cfg_->mod_order, *l, j, false);
+                                      }
+                                  mod_packs::set_enabled(cfg_->mod_order, *l, i, on);
+                                  mods_dirty_ = true;
+                                  if (hooks_.mods_changed) hooks_.mods_changed();
+                                  refresh();
+                              }});
+        }
+    }
+    if (!any) {
+        Item none{"NO CHARACTER PACKS", {}, {}, "packs that replace a character, in the Mods folder"};
+        none.read_only = true;
+        items_.push_back(std::move(none));
+    }
+    add_restart_row();
+    items_.push_back({"BACK", {}, [this](int) { set_page(Page::Options); }});
+}
+
+// This fork: stats and patches are read as the game starts, so after a change
+// to them EXTRA CHARACTERS and MODS offer to start it again (or, where a
+// program cannot start itself again, to quit).
+void Menu::add_restart_row() {
+    if (!hooks_.mods_need_restart || !hooks_.mods_need_restart()) return;
+    if (hooks_.restart) {
+        items_.push_back({"RESTART NOW", {}, [this](int step) { if (step == 0) hooks_.restart(); },
+                          "starts the game again with the change"});
+    } else {
+        items_.push_back({"QUIT TO FINISH", {}, [this](int step) { if (step == 0 && hooks_.quit) hooks_.quit(); },
+                          "start the game again for stats and patches"});
+    }
 }
 
 void Menu::build_video() {
@@ -1465,6 +1537,7 @@ void Menu::refresh() {
     info_lines_.clear();
     if (page_ == Page::Mods) build_mods();
     else if (page_ == Page::ModInfo) build_mod_info();
+    else if (page_ == Page::Characters) build_characters();
     selected_ = items_.empty() ? 0 : std::clamp(keep, 0, int(items_.size()) - 1);
     scroll_ = top;
 }
@@ -1537,6 +1610,7 @@ void Menu::build_mods() {
                           refresh();
                       },
                       restart ? "patches and stats: restart the game" : "read the Mods folder again"});
+    add_restart_row();
     const std::vector<mod_packs::Pack>* list = packs();
     if (!list || list->empty()) {
         Item none{"NO MODS YET", {}, {}, "a folder per mod in Mods, see README"};
@@ -2345,6 +2419,7 @@ void Menu::draw_options(ui::Ui& g) {
                               ? (keys_player_ == 0 ? (keys_pad_ ? "1P GAMEPAD" : "1P KEYBOARD")
                                                    : (keys_pad_ ? "2P GAMEPAD" : "2P KEYBOARD"))
                         : page_ == Page::Mods ? "MODS"
+                        : page_ == Page::Characters ? "EXTRA CHARACTERS"
                         : page_ == Page::Music ? "MUSIC PLAYER"
                         : page_ == Page::Netplay ? "NETPLAY"
                         : "OPTIONS";
