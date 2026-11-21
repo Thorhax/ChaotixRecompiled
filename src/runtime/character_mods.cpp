@@ -284,6 +284,7 @@ constexpr uint32_t kEspioCycle = 0x00E7BA;
 // The special stage's colours of each character (18 words, loaded to entries
 // 0x6E-0x7F; the blocks overlap as the level ones do). No table of pointers
 // was found: the code picks them, so these are the ROM's own offsets.
+constexpr uint32_t kBonusColours = 0x229000, kBonusColoursEnd = 0x229800;
 constexpr uint32_t kSpecialColours[kCount] = {0x7F7C4, 0x7F7C4, 0x7F7E2, 0x7F806, 0x7F82A, 0x7F84C, 0x7F868, 0x7F88C};
 
 bool in_rom(const Rom& rom, uint32_t off, uint32_t n) { return off < rom.file_size && n <= rom.file_size - off; }
@@ -340,6 +341,26 @@ CharacterPalettes::CharacterPalettes(const Rom& rom, const std::vector<Character
                 c.mod[i] = m.special_set[size_t(i)] ? m.special[size_t(i)] : c.rom[i];
             }
             special_.push_back(c);
+            // The bonus stage shows the same sprites in the player's block of
+            // colours, from tables of its own beside the levels' (ROM
+            // 0x229000-0x229800; Mighty's is at 0x229300): the special
+            // stage's colours, each part at most one step away. Every block
+            // there that reads so is taken for it; only the one on screen
+            // can match.
+            const auto near = [](uint16_t a, uint16_t b) {
+                for (int sh = 0; sh < 15; sh += 5)
+                    if (std::abs(int((a >> sh) & 31) - int((b >> sh) & 31)) > 1) return false;
+                return true;
+            };
+            for (uint32_t at = kBonusColours; at + 2 * kColours <= kBonusColoursEnd && in_rom(rom, at, 2 * kColours); at += 2) {
+                Char b = c;
+                bool all = true;
+                for (int i = 0; i < kColours && all; ++i) {
+                    b.rom[i] = rom.read16(at + 2 * uint32_t(i)) & 0x7FFF;
+                    all = near(b.rom[i], c.rom[i]);
+                }
+                if (all) bonus_.push_back(b);
+            }
         }
         if (std::none_of(m.palette_set.begin(), m.palette_set.end(), [](bool b) { return b; }) &&
             std::none_of(m.cycle_set.begin(), m.cycle_set.end(), [](bool b) { return b; })) continue;
@@ -442,10 +463,12 @@ bool CharacterPalettes::substitute(const Char& c, int base) {
     return false;
 }
 
-const uint16_t* CharacterPalettes::display(const uint16_t* cram, const uint8_t* offsets) {
-    if (valid_ && std::memcmp(key_pal_, cram, sizeof key_pal_) == 0 && std::memcmp(key_offsets_, offsets, sizeof key_offsets_) == 0)
+const uint16_t* CharacterPalettes::display(const uint16_t* cram, const uint8_t* offsets, bool bonus_stage) {
+    if (valid_ && key_bonus_ == bonus_stage && std::memcmp(key_pal_, cram, sizeof key_pal_) == 0 &&
+        std::memcmp(key_offsets_, offsets, sizeof key_offsets_) == 0)
         return changed_ ? out_ : cram;
     valid_ = true;
+    key_bonus_ = bonus_stage;
     ++recomputed_;
     std::memcpy(key_pal_, cram, sizeof key_pal_);
     std::memcpy(key_offsets_, offsets, sizeof key_offsets_);
@@ -459,8 +482,11 @@ const uint16_t* CharacterPalettes::display(const uint16_t* cram, const uint8_t* 
     // one offset byte can only name one of the two blocks.
     for (const uint8_t base : {kPlayerOffset, kPartnerOffset}) {
         bool claimed = false, done = false;
+        if (bonus_stage && base == kPlayerOffset)
+            for (const Char& c : bonus_)
+                if (!done && substitute(c, base)) { ++substituted_; done = true; }
         for (const Char& c : chars_) {
-            if (offsets[c.id] != base) continue;
+            if (done || offsets[c.id] != base) continue;
             claimed = true;
             if (substitute(c, base)) { ++substituted_; done = true; break; }
         }

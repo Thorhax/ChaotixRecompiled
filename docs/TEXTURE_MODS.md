@@ -358,8 +358,13 @@ Known limits:
   `BB` - 8) shows frame `FF` (hex), everything of bank `BB` is drawn `DX`
   pixels right and `DY` down of where the game draws it (`DX` is for a
   character facing right and is mirrored with it). For a body drawn with its
-  hands elsewhere. `#` starts a comment. Like a replacement, it changes only
-  the picture.
+  hands elsewhere. The game draws several hand graphics for one body frame
+  (another while the tether pulls), so the file can say where the ring
+  belongs instead: `ring HH CX CY` gives the ring's centre in hand frame `HH`
+  from that frame's hotspot, `at FF TX TY` where the centre goes while the
+  body shows frame `FF`, from the body's hotspot; a draw with both known is
+  placed so. `#` starts a comment. Like a replacement, it changes only the
+  picture.
   Being drawn at the game's resolution, a replacement can be more detailed
   only within that resolution: high-resolution replacements would need the
   compositor to output more than 320 pixels, which is not done.

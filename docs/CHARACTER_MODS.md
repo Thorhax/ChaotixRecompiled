@@ -218,6 +218,12 @@ palette entries 0x6E to 0x7F, and the game adds 0x6D to the player's bank in
 memory: a replacement sprite for that bank is drawn as it is, so its pixels
 are 0x6E to 0x7F (value + 0x6D).
 
+The bonus stage shows the same sprites, in the player's block of colours
+instead (entries 0x13 to 0x24, pixel values + 0x12, from colour tables of its
+own at ROM 0x229000 to 0x229800). There the same replacement is drawn in that
+block and the `[SpecialStage]` colours are shown in it, so a file needs
+nothing more for the bonus stage.
+
 ## Extra moves: `[Moves]` (this fork)
 
 Two moves the game never had can be given to a slot:
@@ -227,7 +233,16 @@ Two moves the game never had can be given to a slot:
 stomp = 1       ; jump again in the air to drop straight down
 drop_dash = 1   ; in a jump, hold jump again; landing starts a roll
 ray_glide = 1   ; jump again in the air to glide: forward dives, back pulls up
+hammer = 1      ; jump again in the air swings a hammer around the character
 ```
+
+`hammer` is Amy's hammer spin from Sonic Origins Plus. It goes with
+`drop_dash` or alone. For 24 frames the character is still the ball the
+jump is, so it hits what a jump hits; the swing is its look, and the pack
+draws it: the body's sheet (`32x_<bank>.txt`) gets eight extra frames, 80
+to 87, each shown for three frames in place of the ball. An extra frame's
+line gives a box of one point (`frame 80 X Y W H 0 1 0 0`) and its picture is
+placed from the cell's hotspot. Without those frames the ball is shown.
 
 `ray_glide` is Ray's glide from Sonic Mania Plus and stands alone (a slot
 with it has neither of the other two). It runs in Knuckles' glide state, so
@@ -346,8 +361,8 @@ the player's ground speed in Botanic Base is at `AD74`).
 - Only scenes where the characters use the palette blocks above are
   recoloured; levels and the lobby were checked. This fork adds PLAYER
   SELECT (every bank has a block of its own there, at its own colour offset)
-  and the special stage (`[SpecialStage]`). The bonus stage was not looked
-  at. The results screen, the title's characters and the life icons were not
+  and the special stage (`[SpecialStage]`), whose colours the bonus stage
+  shows too. The results screen, the title's characters and the life icons were not
   mapped and keep the game's colours (the colour check leaves anything it
   does not recognise alone).
 - A fade other than the game's two uniform ones (none was seen) shows the

@@ -472,6 +472,12 @@ bool sheet_replacements(const SheetLayout& l, const uint8_t* px, int width, int 
         r.image.height = h;
         r.image.dx = left - bx;
         r.image.dy = top - by;
+        if (c.frame >= 0x80) {
+            // An extra frame has no graphic of its own to be measured from.
+            r.image.dx = left - (c.x + l.hot_x);
+            r.image.dy = top - (c.y + l.hot_y);
+            r.image.from_hotspot = true;
+        }
         r.image.px.resize(size_t(w) * size_t(h));
         for (int y = 0; y < h; ++y)
             for (int x = 0; x < w; ++x) {

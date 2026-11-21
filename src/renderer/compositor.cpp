@@ -65,7 +65,7 @@ void Machine::render_line32x(int ln, uint32_t* all, int extra, bool wide_src, co
     if (sprites) sprites->shown(*this, fb, shadow);
     // Character mods' colours (runtime/character_mods.h): a copy of the
     // palette with their entries substituted, likewise only for the picture.
-    const uint16_t* pal = characters ? characters->display(mars.pal, sdram + CharacterPalettes::kOffsetBytes) : mars.pal;
+    const uint16_t* pal = characters ? characters->display(mars.pal, sdram + CharacterPalettes::kOffsetBytes, patches::bonus_stage(*this)) : mars.pal;
     // The palette's 256 entries encoded once, again only when it changed.
     if (enc32x_pri != int(pri) || !same_bytes(enc32x_pal, pal, sizeof enc32x_pal)) {
         for (int i = 0; i < 256; ++i) enc32x[i] = encode(pal[i], pri);

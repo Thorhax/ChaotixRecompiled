@@ -316,7 +316,39 @@ const std::vector<uint8_t>* SpriteLayer::graphic_for(const SpriteDraw& d, const 
     if (it == graphics_.end()) {
         std::vector<uint8_t> out;
         std::string why;
-        if (!replacement_graphic(g, d.size, image, out, &why)) {
+        SpriteImage placed;
+        const SpriteImage* use = &image;
+        if (image.from_hotspot && d.size >= 8) {
+            // From the corner of the graphic it is drawn in place of.
+            placed = image;
+            placed.dx -= s16(g);
+            placed.dy -= line_of(s16(g + 4));
+            placed.from_hotspot = false;
+            use = &placed;
+        }
+        // This fork: the bonus stage draws the special stage's sprites of the
+        // player in the level's block of colours (pixel values 0x13-0x24,
+        // not 0x6E-0x7F): a replacement made for the special stage is drawn
+        // in the block the graphic it replaces is in.
+        if (d.bank >= 16) {
+            SpriteImage orig;
+            const auto within = [](const SpriteImage& im, int lo, int hi) {
+                bool any = false;
+                for (const uint8_t v : im.px) {
+                    if (!v) continue;
+                    if (v < lo || v > hi) return false;
+                    any = true;
+                }
+                return any;
+            };
+            if (within(*use, 0x6E, 0x7F) && graphic_image(g, d.size, orig) && within(orig, 0x13, 0x24)) {
+                if (use != &placed) placed = *use;
+                for (uint8_t& v : placed.px)
+                    if (v) v = uint8_t(v - 0x6D + 0x12);
+                use = &placed;
+            }
+        }
+        if (!replacement_graphic(g, d.size, *use, out, &why)) {
             // Said once: the original is drawn instead.
             if (d.bank >= 0) LOGW("sprites", "32x_%02x_%02x.png: %s; the original is drawn", unsigned(d.bank), unsigned(d.frame), why.c_str());
             else LOGW("sprites", "32x_%016llx.png: %s; the original is drawn", (unsigned long long)d.hash, why.c_str());
@@ -335,18 +367,28 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
     std::vector<const std::vector<uint8_t>*> rep(list.draws.size(), nullptr);
     // A hand's draw goes with the body of the same character (the same
     // colour offset) in this picture: SpritePack::hand_shift.
-    std::vector<const SpritePack::Shift*> hand;
-    std::vector<uint8_t> hand_flip;
+    struct HandMove { bool on = false; int32_t dx = 0, dy = 0; };
+    std::vector<HandMove> hand;
     if (pack && pack->hand_shifts()) {
-        hand.assign(list.draws.size(), nullptr);
-        hand_flip.assign(list.draws.size(), 0);
+        hand.assign(list.draws.size(), HandMove{});
         for (size_t j = 0; j < list.draws.size(); ++j) {
             const SpriteDraw& d = list.draws[j];
             if (!d.size || d.bank < 8 || d.bank > 15) continue;
             for (const SpriteDraw& body : list.draws) {
                 if (body.bank != d.bank - 8 || body.colour != d.colour) continue;
-                hand[j] = pack->hand_shift(d.bank, body.frame);
-                hand_flip[j] = uint8_t(body.flags & 3);
+                // In the body's own pixels: mirrored with it, and as large.
+                const int32_t bx = body.flags & 1 ? -1 : 1, by = body.flags & 2 ? -1 : 1;
+                const bool scaled = d.kind == SpriteKind::Scaled;
+                const auto size = [&](int32_t v, int32_t s) { return scaled ? v * s / 0x100 : v; };
+                const SpritePack::Shift* ring = pack->ring_centre(d.bank, d.frame);
+                const SpritePack::Shift* place = pack->ring_place(d.bank, body.frame);
+                if (ring && place) {
+                    const int32_t hx = d.flags & 1 ? -1 : 1, hy = d.flags & 2 ? -1 : 1;
+                    hand[j] = HandMove{true, body.x + size(bx * place->dx, d.sx) - (d.x + size(hx * ring->dx, d.sx)),
+                                       body.y + size(by * place->dy, d.sy) - (d.y + size(hy * ring->dy, d.sy))};
+                } else if (const SpritePack::Shift* shift = pack->hand_shift(d.bank, body.frame)) {
+                    hand[j] = HandMove{true, size(bx * shift->dx, d.sx), size(by * shift->dy, d.sy)};
+                }
                 break;
             }
         }
@@ -355,7 +397,7 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
     for (size_t j = 0; j < list.draws.size(); ++j) {
         const SpriteDraw& d = list.draws[j];
         if (!d.size) continue;
-        if ((moves && j < moves->size() && (*moves)[j].on) || (!hand.empty() && hand[j])) ++moved;
+        if ((moves && j < moves->size() && (*moves)[j].on) || (!hand.empty() && hand[j].on)) ++moved;
         const SpriteImage* img = pack ? pack->find(d) : nullptr;
         if (!img) continue;
         rep[j] = graphic_for(d, list.bytes(d), *img);
@@ -394,7 +436,7 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
         const uint8_t* warp = d.kind == SpriteKind::Warped ? list.pool.data() + d.warp : nullptr;
         Replay r{this, &t, uint32_t(std::min<size_t>(j, 0xFFFF)), d.route, false, true};
         const SpriteMove* mv = moves && j < moves->size() && (*moves)[j].on ? &(*moves)[j] : nullptr;
-        const SpritePack::Shift* hs = hand.empty() ? nullptr : hand[j];
+        const HandMove* hs = !hand.empty() && hand[j].on ? &hand[j] : nullptr;
         if (rep[j] || mv || hs) {
             // The original's bytes and those drawn in its place (the
             // replacement, or the draw moved: start_glide.h) are composed
@@ -413,11 +455,8 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
                 }
             }
             if (hs) {
-                // In the body's own pixels: mirrored with it, and as large.
-                const int32_t dx = hand_flip[j] & 1 ? -hs->dx : hs->dx, dy = hand_flip[j] & 2 ? -hs->dy : hs->dy;
-                const bool scaled = at.kind == SpriteKind::Scaled;
-                at.x += scaled ? dx * at.sx / 0x100 : dx;
-                at.y += scaled ? dy * at.sy / 0x100 : dy;
+                at.x += hs->dx;
+                at.y += hs->dy;
             }
             r.mark = true;
             r.write = false;

@@ -9,6 +9,10 @@ way, in a level with two characters and in the lobby every picture must be
 exactly the original one, and the recompiled machine must stay bit-identical
 to the interpreter with the pack on both. Widescreen on and off.
 
+A 32x_0a.hands file (this fork) moves Knuckles' ring and hand by his body's
+frame: with every shift 0 no picture changes, with a shift the level with
+Knuckles changes and the one without him does not, in lockstep.
+
 Then Knuckles' body sheet (bank 02) is recoloured: its 113 cells load, a
 level with Knuckles changes, still in lockstep, and a level without him does
 not.
@@ -170,6 +174,29 @@ class SpriteSheets(unittest.TestCase):
         self.assertGreater(differ, len(plain) // 2, "Knuckles did not change")
         plain = self.plain_hashes("mighty_espio", 53)
         out, other = run(*SCENES["mighty_espio"], "--wide", "53", "--tiles", mod)
+        differ = [f for f in sorted(plain, key=int) if other.get(f) != plain[f]]
+        self.assertEqual(differ[:5], [], "a level without Knuckles changed")
+
+    def test_e_a_hands_file_moves_that_characters_ring_only(self):
+        def hands(name, dx, dy):
+            d = os.path.join(self.dir, name)
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "32x_0a.hands"), "w", encoding="utf-8") as f:
+                f.write("# body frame, dx, dy\n" + "".join("%02x %d %d\n" % (i, dx, dy) for i in range(0x71)))
+            return d
+        plain = self.plain_hashes("knuckles_espio", 53)
+        out, still = run(*SCENES["knuckles_espio"], "--wide", "53", "--tiles", hands("hands_zero", 0, 0), "--lockstep")
+        self.assertIn("32x_0a.hands: the hand moves with 113 body frame(s)", out, out[-2000:])
+        self.assertIn("lockstep: %d frames bit-identical" % FRAMES, out, out[-2000:])
+        differ = [f for f in sorted(plain, key=int) if still.get(f) != plain[f]]
+        self.assertEqual(differ[:5], [], "a shift of nothing changed %d pictures" % len(differ))
+        moved_dir = hands("hands_moved", 9, -7)
+        out, moved = run(*SCENES["knuckles_espio"], "--wide", "53", "--tiles", moved_dir, "--lockstep")
+        self.assertIn("lockstep: %d frames bit-identical" % FRAMES, out, out[-2000:])
+        differ = sum(1 for f in plain if moved.get(f) != plain[f])
+        self.assertGreater(differ, 200, "Knuckles' ring did not move")
+        plain = self.plain_hashes("mighty_espio", 53)
+        out, other = run(*SCENES["mighty_espio"], "--wide", "53", "--tiles", moved_dir)
         differ = [f for f in sorted(plain, key=int) if other.get(f) != plain[f]]
         self.assertEqual(differ[:5], [], "a level without Knuckles changed")
 

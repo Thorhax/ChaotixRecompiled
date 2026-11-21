@@ -59,8 +59,13 @@ int load_sprite_pack(SpritePack& pack, const std::string& dir, std::vector<std::
                     unsigned frame = 0;
                     int dx = 0, dy = 0;
                     if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
-                    if (std::sscanf(line, "%x %d %d", &frame, &dx, &dy) == 3 && frame <= 0xFF && dx >= -127 && dx <= 127 &&
-                        dy >= -127 && dy <= 127) {
+                    const auto fits = [&] { return frame <= 0xFF && dx >= -127 && dx <= 127 && dy >= -127 && dy <= 127; };
+                    if (std::sscanf(line, "ring %x %d %d", &frame, &dx, &dy) == 3 && fits()) {
+                        pack.add_ring_centre(int(hand_bank), int(frame), dx, dy);
+                    } else if (std::sscanf(line, "at %x %d %d", &frame, &dx, &dy) == 3 && fits()) {
+                        pack.add_ring_place(int(hand_bank), int(frame), dx, dy);
+                        ++n;
+                    } else if (std::sscanf(line, "%x %d %d", &frame, &dx, &dy) == 3 && fits()) {
                         pack.add_hand_shift(int(hand_bank), int(frame), dx, dy);
                         ++n;
                     } else {
@@ -68,7 +73,7 @@ int load_sprite_pack(SpritePack& pack, const std::string& dir, std::vector<std::
                     }
                 }
                 std::fclose(f);
-                if (bad) say(name + ": " + std::to_string(bad) + " line(s) are not \"FRAME DX DY\"; ignored");
+                if (bad) say(name + ": " + std::to_string(bad) + " line(s) are not \"FRAME DX DY\", \"ring FRAME X Y\" or \"at FRAME X Y\"; ignored");
                 say(name + ": the hand moves with " + std::to_string(n) + " body frame(s)");
             }
             continue;

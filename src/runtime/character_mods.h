@@ -120,11 +120,13 @@ public:
     CharacterPalettes(const Rom& rom, const std::vector<CharacterMod>& mods);
 
     // Whether any mod has colours; without, there is nothing to do.
-    bool empty() const { return chars_.empty() && special_.empty(); }
+    bool empty() const { return chars_.empty() && special_.empty(); }  // (bonus_ has only what special_ has)
 
     // The palette to show: `cram` itself, or a substituted copy. `offsets` is
     // the 16 colour offset bytes at SDRAM 0x06004B00 (one per bank).
-    const uint16_t* display(const uint16_t* cram, const uint8_t* offsets);
+    // `bonus_stage`: the scene is the bonus stage, whose player is drawn with
+    // its special stage sprites in the player's block of colours.
+    const uint16_t* display(const uint16_t* cram, const uint8_t* offsets, bool bonus_stage = false);
 
     // Colour blocks substituted the last time the palette was worked out
     // (0, 1 or 2), and how many times it was; for tests and the log.
@@ -159,6 +161,8 @@ private:
     std::vector<Char> special_;  // the special stage's colours of the characters that change them
     uint16_t key_pal_[256] = {};
     uint8_t key_offsets_[16] = {};
+    bool key_bonus_ = false;
+    std::vector<Char> bonus_;    // the level's colours of those characters, with the special stage's as the mod's
     bool valid_ = false;
     bool changed_ = false;
     uint16_t out_[256] = {};

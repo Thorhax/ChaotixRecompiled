@@ -603,6 +603,7 @@ void lobby_margins(Machine& m, int e) {
 }
 
 bool title_margins(const Machine& m) { return wram16(m, kGameMode) == title_hold::kModeTitle; }
+bool bonus_stage(const Machine& m) { return wram16(m, kGameMode) == 0x50; }  // (0x18 a level, 0x20 the special stage)
 
 bool menu_margins(const Machine& m) {
     const uint16_t mode = wram16(m, kGameMode);

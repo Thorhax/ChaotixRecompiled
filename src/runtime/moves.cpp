@@ -203,7 +203,7 @@ void ray_glide(Machine& m, int who, uint32_t obj, uint32_t pad) {
     // which his own glide runs through once); here the frame says how he
     // climbs or falls, from a steep climb to a steep dive. The game's step
     // adds a quarter of a frame to what is written, which stays in the frame.
-    const int pose = fall < -0x28000 ? 0 : fall < -0x8000 ? 1 : fall < 0x1C000 ? 2 : fall < 0x48000 ? 3 : 4;
+    const int pose = fall < -0x28000 ? 0 : fall < -0x8000 ? 1 : fall < 0x14000 ? 2 : fall < 0x30000 ? 3 : 4;
     wr16(m, obj + kObjAnimFrame, uint16_t(pose << 8));
     // The state's code moves him by the X velocity and by its own small fall:
     // the rest of the fall is added to where he is.
@@ -213,13 +213,37 @@ void ray_glide(Machine& m, int who, uint32_t obj, uint32_t pad) {
     wr16(m, pad + 8, 0);
 }
 
+void hammer(Machine& m, int who, uint32_t obj, uint32_t pad) {
+    int32_t& left = m.glide_fall[who];
+    const uint8_t state = m.wram[(obj + kObjState) & 0xFFFF];
+    const bool in_air = state == kStateJump || state == kStateFall;
+    if (!in_air || rd16(m, obj + kObjAnim) != kAnimBall) {
+        left = 0;
+    } else if (left > 0) {
+        --left;
+    } else if (m.wram[(pad + 3) & 0xFFFF] & kJump) {
+        left = kHammerFrames;
+        LOGD("moves", "hammer: character %d", who);
+    }
+}
+
 } // namespace
+
+int extra_frame(const Machine& m, int who, int bank) {
+    if (rd16(m, patches::kGameMode) != kModeLevel) return -1;
+    const unsigned character = (rd16(m, kCharacterId[who]) >> 2) & 7;
+    if (int(character) != bank || !(m.move_sets[character] & kHammer) || (m.move_sets[character] & kRayGlide)) return -1;
+    const int32_t left = m.glide_fall[who];
+    if (left <= 0 || left > kHammerFrames) return -1;
+    return kHammerFirst + ((kHammerFrames - left) / kHammerHold) % kHammerPoses;
+}
 
 uint8_t by_name(const char* name) {
     const std::string n = name;
     if (n == "stomp") return kStomp;
     if (n == "drop_dash") return kDropDash;
     if (n == "ray_glide") return kRayGlide;
+    if (n == "hammer") return kHammer;
     return 0;
 }
 
@@ -244,6 +268,7 @@ void on_chars_update(Machine& m) {
         const bool computer = who == 1 && tether::cpu_partner(m);
         if (!objs[who] || !set || computer || (who == 1 && objs[1] == objs[0])) {
             m.move_state[who] = 0;
+            if (set & kHammer) m.glide_fall[who] = 0;
             continue;
         }
         if (set & kRayGlide) { ray_glide(m, who, objs[who], pads[who]); continue; }
@@ -251,6 +276,7 @@ void on_chars_update(Machine& m) {
         else m.move_state[who] &= uint8_t(~kStomping);
         if (set & kDropDash) drop_dash(m, who, objs[who], pads[who]);
         else m.move_state[who] &= uint8_t(~(kDashReleased | kDashCount));
+        if (set & kHammer) hammer(m, who, objs[who], pads[who]);
     }
 }
 

@@ -154,8 +154,12 @@ TEST(character_mods, a_moves_section_is_the_slots_whole_set) {
     CHECK_EQ(int(uint8_t((from_settings & ~sonic.moves_given) | sonic.moves)), int(moves::kDropDash));
     const CharacterMod plain = parsed(0, "[Palette]\n1 = #FFFFFF\n");
     CHECK_EQ(int(plain.moves_given), 0);
-    parsed(0, "[Moves]\nhammer = 1\ndrop_dash = 2\n", &messages);
+    parsed(0, "[Moves]\nboomerang = 1\ndrop_dash = 2\n", &messages);
     CHECK_EQ(int(messages.size()), 2);
+    messages.clear();
+    const CharacterMod amy = parsed(0, "[Moves]\ndrop_dash = 1\nhammer = 1\n", &messages);
+    CHECK(messages.empty());
+    CHECK_EQ(int(amy.moves), int(moves::kDropDash | moves::kHammer));
 }
 
 TEST(character_mods, a_character_section_names_the_slot) {

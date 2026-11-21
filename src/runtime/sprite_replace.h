@@ -44,8 +44,9 @@ public:
     void add(int bank, int frame, SpriteImage image) { by_slot_[uint32_t(bank) << 8 | uint32_t(frame)] = std::move(image); }
     void add(uint64_t hash, SpriteImage image) { by_hash_[hash] = std::move(image); }
     const SpriteImage* find(const SpriteDraw& d) const;
+    bool has(int bank, int frame) const { return by_slot_.count(uint32_t(bank) << 8 | uint32_t(frame)) != 0; }
     size_t size() const { return by_slot_.size() + by_hash_.size(); }
-    bool empty() const { return size() == 0; }
+    bool empty() const { return size() == 0 && hands_.empty() && places_.empty(); }
 
     // This fork: where a character's hand and ring (bank C + 8) are drawn for
     // a body drawn with more arms than the game's (32x_<C+8>.hands,
@@ -61,10 +62,28 @@ public:
         const auto it = hands_.find(uint32_t(hand_bank) << 8 | uint32_t(body_frame));
         return it == hands_.end() ? nullptr : &it->second;
     }
-    size_t hand_shifts() const { return hands_.size(); }
+    // The same file's other way, which holds whichever hand graphic the game
+    // draws: `ring HH CX CY` is the ring's centre in hand frame HH, from its
+    // hotspot, and `at FF TX TY` where that centre goes while the body shows
+    // frame FF, from the body's hotspot. With both known the hand is placed
+    // so; else by the shift above, if the body's frame has one.
+    void add_ring_centre(int hand_bank, int hand_frame, int cx, int cy) {
+        rings_[uint32_t(hand_bank) << 8 | uint32_t(hand_frame)] = Shift{int8_t(cx), int8_t(cy)};
+    }
+    void add_ring_place(int hand_bank, int body_frame, int tx, int ty) {
+        places_[uint32_t(hand_bank) << 8 | uint32_t(body_frame)] = Shift{int8_t(tx), int8_t(ty)};
+    }
+    const Shift* ring_centre(int hand_bank, int hand_frame) const { return look(rings_, hand_bank, hand_frame); }
+    const Shift* ring_place(int hand_bank, int body_frame) const { return look(places_, hand_bank, body_frame); }
+    size_t hand_shifts() const { return hands_.size() + places_.size(); }
 
 private:
-    std::unordered_map<uint32_t, Shift> hands_;
+    static const Shift* look(const std::unordered_map<uint32_t, Shift>& map, int bank, int frame) {
+        if (map.empty() || bank < 8 || frame < 0) return nullptr;
+        const auto it = map.find(uint32_t(bank) << 8 | uint32_t(frame));
+        return it == map.end() ? nullptr : &it->second;
+    }
+    std::unordered_map<uint32_t, Shift> hands_, rings_, places_;
     std::unordered_map<uint32_t, SpriteImage> by_slot_;
     std::unordered_map<uint64_t, SpriteImage> by_hash_;
 };

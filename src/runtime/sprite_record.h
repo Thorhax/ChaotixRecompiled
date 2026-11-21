@@ -96,6 +96,10 @@ struct SpriteImage {
     // A replacement's top-left corner from the original box's: negative
     // where it reaches left of the box or above it.
     int dx = 0, dy = 0;
+    // This fork: (dx, dy) is the corner from the hotspot instead (a sheet's
+    // extra frames, 80 and up, drawn in place of whichever frame the game
+    // shows: runtime/moves.h).
+    bool from_hotspot = false;
 };
 
 // A graphic drawn, for dumping: its name (bank and frame, or the hash), its

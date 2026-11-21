@@ -415,6 +415,8 @@ bool wide_scene_active(const Machine& m);
 // ever; only the side bars go. The SEGA logo and the boot screens (other
 // modes) are all 32X and keep their bars.
 bool title_margins(const Machine& m);
+// The scene is the bonus stage (this fork: its player's colours, runtime/character_mods.h).
+bool bonus_stage(const Machine& m);
 
 // DATA LOAD (game mode $60), TRAINING and PLAY STYLE ($68) and PLAYER SELECT
 // ($48) (issue #135): their backdrop, the rock, is part of the 32X picture,

@@ -1,3 +1,4 @@
+#include "runtime/moves.h"
 #include "sprite_record.h"
 #include "patches.h"
 #include "sprite_replace.h"
@@ -196,6 +197,12 @@ void SpriteRecorder::hook(const Machine& m, const sh2::State& c, uint32_t pc) {
     }
     lookup_bank(m, d.source, d);
     if (d.bank < 0) ++unknown_graphics;
+    // This fork: a move with a look of its own (the hammer) shows a pack's
+    // extra frame in place of the frame the game draws. Output only.
+    if (pack_ && d.bank >= 0 && d.bank < 8 && (d.colour == 0x12 || d.colour == 0x24)) {
+        const int extra = moves::extra_frame(m, d.colour == 0x24 ? 1 : 0, d.bank);
+        if (extra >= 0 && pack_->has(d.bank, extra)) d.frame = int16_t(extra);
+    }
     list.draws.push_back(d);
     ++draws_recorded;
 }

@@ -55,6 +55,13 @@
 // bit 6 (or the game starts its own glide from the press). The state ends
 // when jump is not held and turns on left or right: the hook holds jump and
 // clears the direction word (+8) in the button record while he glides.
+//
+// HAMMER (Amy's hammer spin, as in Sonic Origins Plus): jump pressed again in
+// a jump swings the hammer around her for kHammerFrames frames. She is the
+// ball the jump already is for that time, so it hits what a jump hits; the
+// swing is its look, drawn from the pack's extra frames (extra_frame). The
+// frames left are kept in Machine::glide_fall, which a character with the
+// glide uses for the glide and no other does.
 #pragma once
 #include <cstdint>
 
@@ -69,6 +76,7 @@ enum : uint8_t {
     kStomp = 0x01,
     kDropDash = 0x02,
     kRayGlide = 0x04,  // instead of the other two, not with them
+    kHammer = 0x08,    // with the drop dash or alone, not with the glide
 };
 // A move by the name a character file's [Moves] section gives it; 0 if none.
 uint8_t by_name(const char* name);
@@ -96,11 +104,20 @@ inline constexpr int32_t kGlideStart = 0x30000, kGlideDiveFall = 0x2400, kGlideD
                          kGlideOwnFall = 0x100,  // glide_fall_speed 1, as the game adds it
                          kGlideLandMax = 0x0C00;  // ground speed (8.8) kept on landing, at most
 
+// The hammer: how long a swing shows, and its frames in a pack's body sheet
+// (kHammerFirst and up, kHammerPoses of them, each shown kHammerHold frames).
+inline constexpr int kHammerFrames = 24, kHammerFirst = 0x80, kHammerPoses = 8, kHammerHold = 3;
+
 // The stomp's first speed, 16.16 px a frame ($999 in 8.8, the mod's value).
 inline constexpr int32_t kStompSpeed = 0x00099900;
 
 // Whether any character has an extra move (a run with one is not a record).
 bool any(const Machine& m);
+
+// The pack's extra body frame to show for the player (who 0) or the partner
+// (1), whose body is bank `bank`, in place of the frame the game draws; -1
+// for none. Read by the sprite recorder: it changes the picture only.
+int extra_frame(const Machine& m, int who, int bank);
 
 // The hook (called from patches::m68k_hook at tether::kCharsUpdate).
 void on_chars_update(Machine& m);
