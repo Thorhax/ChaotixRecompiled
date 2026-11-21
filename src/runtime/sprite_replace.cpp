@@ -333,11 +333,29 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
     const Track& t = track_[b];
     if (!t.complete) return false;
     std::vector<const std::vector<uint8_t>*> rep(list.draws.size(), nullptr);
+    // A hand's draw goes with the body of the same character (the same
+    // colour offset) in this picture: SpritePack::hand_shift.
+    std::vector<const SpritePack::Shift*> hand;
+    std::vector<uint8_t> hand_flip;
+    if (pack && pack->hand_shifts()) {
+        hand.assign(list.draws.size(), nullptr);
+        hand_flip.assign(list.draws.size(), 0);
+        for (size_t j = 0; j < list.draws.size(); ++j) {
+            const SpriteDraw& d = list.draws[j];
+            if (!d.size || d.bank < 8 || d.bank > 15) continue;
+            for (const SpriteDraw& body : list.draws) {
+                if (body.bank != d.bank - 8 || body.colour != d.colour) continue;
+                hand[j] = pack->hand_shift(d.bank, body.frame);
+                hand_flip[j] = uint8_t(body.flags & 3);
+                break;
+            }
+        }
+    }
     size_t replaced = 0, moved = 0;
     for (size_t j = 0; j < list.draws.size(); ++j) {
         const SpriteDraw& d = list.draws[j];
         if (!d.size) continue;
-        if (moves && j < moves->size() && (*moves)[j].on) ++moved;
+        if ((moves && j < moves->size() && (*moves)[j].on) || (!hand.empty() && hand[j])) ++moved;
         const SpriteImage* img = pack ? pack->find(d) : nullptr;
         if (!img) continue;
         rep[j] = graphic_for(d, list.bytes(d), *img);
@@ -376,7 +394,8 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
         const uint8_t* warp = d.kind == SpriteKind::Warped ? list.pool.data() + d.warp : nullptr;
         Replay r{this, &t, uint32_t(std::min<size_t>(j, 0xFFFF)), d.route, false, true};
         const SpriteMove* mv = moves && j < moves->size() && (*moves)[j].on ? &(*moves)[j] : nullptr;
-        if (rep[j] || mv) {
+        const SpritePack::Shift* hs = hand.empty() ? nullptr : hand[j];
+        if (rep[j] || mv || hs) {
             // The original's bytes and those drawn in its place (the
             // replacement, or the draw moved: start_glide.h) are composed
             // again.
@@ -392,6 +411,13 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
                     at.clip.scale_min = int16_t(std::min<int32_t>({at.clip.scale_min, mv->sx, mv->sy}));
                     at.clip.scale_max = int16_t(std::max<int32_t>({at.clip.scale_max, mv->sx, mv->sy}));
                 }
+            }
+            if (hs) {
+                // In the body's own pixels: mirrored with it, and as large.
+                const int32_t dx = hand_flip[j] & 1 ? -hs->dx : hs->dx, dy = hand_flip[j] & 2 ? -hs->dy : hs->dy;
+                const bool scaled = at.kind == SpriteKind::Scaled;
+                at.x += scaled ? dx * at.sx / 0x100 : dx;
+                at.y += scaled ? dy * at.sy / 0x100 : dy;
             }
             r.mark = true;
             r.write = false;

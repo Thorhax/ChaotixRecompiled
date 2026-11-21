@@ -47,6 +47,32 @@ int load_sprite_pack(SpritePack& pack, const std::string& dir, std::vector<std::
     load_sprite_sheets(pack, dir, messages);
     for (const auto& e : fs::directory_iterator(fs::u8path(dir), ec)) {
         const std::string name = e.path().filename().u8string();
+        // This fork: 32x_<BB>.hands, lines of "FF DX DY" (SpritePack::add_hand_shift):
+        // while the body shows frame FF (hex), the hand bank BB is drawn DX, DY pixels away.
+        uint64_t hand_bank = 0;
+        if (e.is_regular_file(ec) && name.size() == 12 && name.compare(0, 4, "32x_") == 0 &&
+            name.compare(6, 6, ".hands") == 0 && hex(name, 4, 2, &hand_bank) && hand_bank >= 8 && hand_bank <= 15) {
+            if (std::FILE* f = std::fopen(e.path().u8string().c_str(), "r")) {
+                char line[128];
+                int n = 0, bad = 0;
+                while (std::fgets(line, sizeof line, f)) {
+                    unsigned frame = 0;
+                    int dx = 0, dy = 0;
+                    if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
+                    if (std::sscanf(line, "%x %d %d", &frame, &dx, &dy) == 3 && frame <= 0xFF && dx >= -127 && dx <= 127 &&
+                        dy >= -127 && dy <= 127) {
+                        pack.add_hand_shift(int(hand_bank), int(frame), dx, dy);
+                        ++n;
+                    } else {
+                        ++bad;
+                    }
+                }
+                std::fclose(f);
+                if (bad) say(name + ": " + std::to_string(bad) + " line(s) are not \"FRAME DX DY\"; ignored");
+                say(name + ": the hand moves with " + std::to_string(n) + " body frame(s)");
+            }
+            continue;
+        }
         if (!e.is_regular_file(ec) || name.size() < 8 || name.compare(0, 4, "32x_") != 0 ||
             name.compare(name.size() - 4, 4, ".png") != 0)
             continue;

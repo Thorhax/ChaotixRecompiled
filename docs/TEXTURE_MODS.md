@@ -352,6 +352,14 @@ Known limits:
   added (`32x_02_51.png.offset`), holding two numbers `DX DY`, moves the
   image's corner from the original's, so a larger image can grow to the left
   and up as well (a sheet's cell already can).
+- This fork: `32x_<BB>.hands`, for a character's second bank `BB` (08 to 0f:
+  its ring and the hand holding it, drawn where the game's own character has
+  its hand). Each line is `FF DX DY`: while that character's body (bank
+  `BB` - 8) shows frame `FF` (hex), everything of bank `BB` is drawn `DX`
+  pixels right and `DY` down of where the game draws it (`DX` is for a
+  character facing right and is mirrored with it). For a body drawn with its
+  hands elsewhere. `#` starts a comment. Like a replacement, it changes only
+  the picture.
   Being drawn at the game's resolution, a replacement can be more detailed
   only within that resolution: high-resolution replacements would need the
   compositor to output more than 320 pixels, which is not done.

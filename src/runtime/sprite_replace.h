@@ -47,7 +47,24 @@ public:
     size_t size() const { return by_slot_.size() + by_hash_.size(); }
     bool empty() const { return size() == 0; }
 
+    // This fork: where a character's hand and ring (bank C + 8) are drawn for
+    // a body drawn with more arms than the game's (32x_<C+8>.hands,
+    // docs/TEXTURE_MODS.md): every draw of `hand_bank` is composed (dx, dy)
+    // pixels from where the game drew it while the same character's body
+    // (bank hand_bank - 8) shows `body_frame`; dx is for a body facing right.
+    struct Shift { int8_t dx = 0, dy = 0; };
+    void add_hand_shift(int hand_bank, int body_frame, int dx, int dy) {
+        hands_[uint32_t(hand_bank) << 8 | uint32_t(body_frame)] = Shift{int8_t(dx), int8_t(dy)};
+    }
+    const Shift* hand_shift(int hand_bank, int body_frame) const {
+        if (hands_.empty() || hand_bank < 8 || body_frame < 0) return nullptr;
+        const auto it = hands_.find(uint32_t(hand_bank) << 8 | uint32_t(body_frame));
+        return it == hands_.end() ? nullptr : &it->second;
+    }
+    size_t hand_shifts() const { return hands_.size(); }
+
 private:
+    std::unordered_map<uint32_t, Shift> hands_;
     std::unordered_map<uint32_t, SpriteImage> by_slot_;
     std::unordered_map<uint64_t, SpriteImage> by_hash_;
 };
