@@ -323,7 +323,8 @@ if(CHAOTIX_BUILD_FRONTEND)
             VERSION "${CHAOTIX_SWITCH_VERSION}")
         nx_create_nro(chaotix
             OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nro"
-            ICON "${CMAKE_CURRENT_SOURCE_DIR}/platforms/switch/icon.png"
+            # A baseline JPEG: the Homebrew Menu shows no other kind.
+            ICON "${CMAKE_CURRENT_SOURCE_DIR}/platforms/switch/icon.jpg"
             NACP "${CMAKE_CURRENT_BINARY_DIR}/ChaotixRecompiled.nacp")
     else()
         target_link_libraries(chaotix PRIVATE chaotix_game SDL3::SDL3 SDL3_ttf::SDL3_ttf Threads::Threads)
