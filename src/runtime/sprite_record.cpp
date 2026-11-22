@@ -292,11 +292,19 @@ void SpriteRecorder::add_effects(const Machine& m, SpriteList& list) {
             d.frame = int16_t(frame);
             d.kind = SpriteKind::Scaled;
             // (The scale is a step through the graphic: 0x100 its own size, more is smaller.)
-            d.sx = d.sy = 0x2C0 + 0x40 * k - age * 8;
+            if (dust.side) {
+                // The drop dash's: a burst as tall as the character left behind where it set off, as in Sonic
+                // Mania, rising a little as it fades; a smaller one further back.
+                d.sx = d.sy = 0x130 + 0xA0 * k - age * 4;
+                d.x = body->x + (dust.x - px) + side * (8 + 14 * k + age / 2);
+                d.y = body->y + (dust.y - py) - 12 + 6 * k - age / 2;
+            } else {
+                d.sx = d.sy = 0x2C0 + 0x40 * k - age * 8;
+                d.x = body->x + (dust.x - px) + side * (5 + 9 * k + age * (2 + k) / 2);
+                d.y = body->y + (dust.y - py) - 3 - age / 4 - 2 * k;
+            }
             d.clip.scale_min = int16_t(std::min<int32_t>(d.clip.scale_min, d.sx));
             d.clip.scale_max = int16_t(std::max<int32_t>(d.clip.scale_max, d.sx));
-            d.x = body->x + (dust.x - px) + side * (5 + 9 * k + age * (2 + k) / 2);
-            d.y = body->y + (dust.y - py) - 3 - age / 4 - 2 * k;
             d.data = data;
             d.size = size;
             d.hash = hash(p, size);

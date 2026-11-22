@@ -312,7 +312,7 @@ if(CHAOTIX_BUILD_FRONTEND)
         # after it (platforms/switch/README.md). Releases are named
         # <upstream>-switch.<n>; the homebrew menu has room for 15 letters,
         # so it shows <upstream>-sw.<n>.
-        set(CHAOTIX_SWITCH_REVISION 5)
+        set(CHAOTIX_SWITCH_REVISION 6)
         set(CHAOTIX_SWITCH_VERSION "${PROJECT_VERSION}-sw.${CHAOTIX_SWITCH_REVISION}")
         # No RomFS: the .nro must never carry the game. Players put their own
         # ROM on the SD card.
