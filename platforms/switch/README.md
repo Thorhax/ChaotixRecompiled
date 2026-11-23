@@ -2,10 +2,11 @@
 
 A homebrew `.nro` of [Knuckles' Chaotix Recompiled](https://github.com/YuutaTsubasa/ChaotixRecompiled)
 by YuutaTsubasa. The recompiler, the runtime and the frontend are upstream's;
-this fork adds what the Switch needs and follows upstream's releases. A build
-is numbered after the upstream version it is made from: `0.15.22-switch.1` is
-the first Switch build of upstream 0.15.22 (the homebrew menu, which has less
-room, shows it as `0.15.22-sw.1`).
+this fork adds what the Switch needs and follows upstream's releases. Since
+1.0.0 the port has a version of its own (`v1.0.0`, shown as `1.0.0` in the
+homebrew menu); each release's notes say which upstream version it is made
+from (1.0.0: upstream 0.15.23). Builds before it were numbered after upstream:
+`0.15.22-switch.1` was the first Switch build of upstream 0.15.22.
 
 It needs a console that runs homebrew (Atmosphère) and **your own** ROM of
 *Knuckles' Chaotix (Japan, USA)* for the 32X, SHA-1
