@@ -310,11 +310,11 @@ if(CHAOTIX_BUILD_FRONTEND)
             -lSDL2_ttf -lSDL2 -lGLESv2 -lEGL -lglapi -ldrm_nouveau
             -lfreetype -lharfbuzz -lbz2 -lpng -lz -lnx -lm)
         # The port's own version (platforms/switch/README.md), shown in the
-        # homebrew menu and naming the releases (v1.0.0). Until 1.0.0 the
+        # homebrew menu and naming the releases (v1.0.1). Until 1.0.1 the
         # releases were named after upstream's version (0.15.23-switch.2);
         # upstream's own, which save states are checked against, is still
         # PROJECT_VERSION.
-        set(CHAOTIX_SWITCH_VERSION "1.0.0")
+        set(CHAOTIX_SWITCH_VERSION "1.0.1")
         # No RomFS: the .nro must never carry the game. Players put their own
         # ROM on the SD card.
         nx_generate_nacp(
