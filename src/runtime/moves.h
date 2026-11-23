@@ -8,13 +8,14 @@
 // state and these settings: lockstep, save states and rewind hold.
 //
 // STOMP (Mighty's drop from Sonic Mania, as the Sonic 3 A.I.R. mod "Ultimate
-// Mighty" has it): in a jump, pressing jump again with neither left nor right
-// held stops the character dead in the air and sends it straight down as a
-// ball, at 9.6 px a frame and faster as gravity adds to it. Landing ends it
-// with a short hop: the game's own jump, from a press the hook makes for
-// that frame, which the game cuts short because the button is not held.
-// Left or right held leaves the press to the game, so Mighty's wall cling
-// (jump against a wall) is as it was. As in Sonic Mania, the landing shakes
+// Mighty" has it): in a jump, pressing jump again stops the character dead
+// in the air and, after a short wind-up, sends it straight down as a ball at
+// kStompSpeed. Landing
+// ends it with a short hop: the game's own jump, from a press the hook makes
+// for that frame, which the game cuts short because the button is not held;
+// spikes it lands on do not hurt, and it rebounds off them. With left or
+// right held, the press goes to the game first so Mighty's wall cling still
+// works (kStompWaitFrames). As in Sonic Mania, the landing shakes
 // the screen and kicks up dust at the feet; both are drawn into the picture
 // only (Machine::shake, Machine::stomp_dust; sprite_record.h draws the dust
 // from the game's own smoke puffs), so the game runs as without them.
@@ -89,6 +90,10 @@
 // flight jump). The frames flown are kept in Machine::glide_fall.
 #pragma once
 #include <cstdint>
+
+namespace m68k {
+struct State;
+}
 
 namespace chaotix {
 
@@ -179,8 +184,44 @@ inline constexpr int kStompShakeFrames = 8;
 inline constexpr int8_t kStompShake[kStompShakeFrames] = {4, -4, 3, -3, 2, -2, 1, -1};
 inline constexpr int kStompDustFrames = 18;
 
-// The stomp's first speed, 16.16 px a frame ($999 in 8.8, the mod's value).
-inline constexpr int32_t kStompSpeed = 0x00099900;
+// The stomp's speed, 16.16 px a frame, held all the way down: the game's
+// own fastest fall, as Sonic Mania's drop (measured from its trailer: about
+// a screen a third of a second). It was 9.6 px a frame and faster with
+// gravity (the "Ultimate Mighty" mod's) until 2026-11-23.
+inline constexpr int32_t kStompSpeed = 0x00100000;
+// The rebound off spikes (on_hurt_test): Mighty's own full jump, 6.5 px a frame.
+inline constexpr int32_t kStompRebound = 0x00068000;
+// As in Sonic Mania, the stomp first hangs in the air kStompWindup frames
+// (its shell flattening), then drops. A pack can give the stomp Sonic Mania's
+// look as extra frames of the character's bank: kStompFirst and up the Drill
+// Dive (4 frames flattening, a burst shown kStompBurst frames as it sets
+// off, then 4 of the drill), kStompUnspinFirst and up the Unspin it rebounds
+// off spikes with (4 uncurling, then 2 in turn, arms out).
+inline constexpr int kStompWindup = 4, kStompBurst = 3;
+inline constexpr int kStompFirst = 0xA0, kStompUnspinFirst = 0xA9;
+
+// Mighty's wall cling and the stomp share a button: in the air, jump pressed
+// again with left or right held. The game clings ($88BA6A: state
+// $20) when the character, jump still held, meets a wall, which can be a
+// frame or two after the press. So such a press goes to the game, and the
+// stomp follows kStompWaitFrames later if the game has not clung by then
+// (sooner if jump is let go). A press with neither
+// left nor right held stomps at once.
+inline constexpr int kStompWaitFrames = 5;
+
+// As in Sonic Mania, the stomp does not get hurt by the spikes it lands on:
+// nothing hurts the character from the press to kStompSafeFrames after the
+// landing (its hop off them), and the first hurt kept off sends it back up
+// (kStompRebound), as Mania's Mighty bounces off spikes. Every hurt goes through $88FBB2 (a0 the
+// character), which does nothing when the character's word +$30 (the
+// frames it blinks after a hit) is not 0: the hook at kHurtTest sets it for
+// a stomping character, and the one at kHurtDone, where the routine ends,
+// puts it back (Machine::hurt_masked, never in a save state). Enemies the
+// ball hits die as they did; it no longer blinks for that.
+inline constexpr int kStompSafeFrames = 12;
+inline constexpr uint32_t kHurtTest = 0x88FBBA, kHurtDone = 0x88FC36;
+void on_hurt_test(Machine& m, m68k::State* c);
+void on_hurt_done(Machine& m);
 
 // Whether any character has an extra move (a run with one is not a record).
 bool any(const Machine& m);

@@ -271,6 +271,10 @@ public:
     // two back on the tether's circle; used and dropped by the next
     // instruction's hook, within the same routine, so never in a save state.
     bool tether_clamp_saved = false;
+    // The character object whose word +$30 the stomp's hurt hook set for
+    // the length of the game's hurt routine (runtime/moves.h); 0 for none.
+    // Set and cleared within one routine, so never in a save state.
+    uint16_t hurt_masked = 0;
     uint32_t tether_clamp_x = 0, tether_clamp_y = 0;
     // Music replaced by files (audio/music_mods.h): which music ids the host
     // plays itself, and the music requests and commands the game has made

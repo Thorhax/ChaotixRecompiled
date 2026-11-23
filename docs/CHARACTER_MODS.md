@@ -237,9 +237,21 @@ hammer = 1      ; jump again in the air swings a hammer around the character
 tails_flight = 1 ; jump again in the air flies (Charmy's slot)
 ```
 
-As in Sonic Mania, the stomp's landing shakes the screen for a few frames
-and kicks up dust at the feet (the game's own smoke puffs, drawn small).
-Both are in the picture only: the game runs as without them. The drop dash
+As in Sonic Mania, the stomp first hangs in the air for 4 frames, then drops
+at 16 pixels a frame (the game's fastest fall), and its landing shakes the screen for a few frames and kicks up dust
+at the feet (the game's own smoke puffs, drawn small). The shake and dust are
+in the picture only: the game runs as without them. Spikes the stomp lands on
+do not hurt: the character rebounds off them a full jump high (landing on
+them again afterwards hurts as usual). Mighty's wall cling still works: a
+press with left or right held goes to the game first, and the stomp follows
+5 frames later if he has not caught a wall by then. A pack can draw the
+stomp as Sonic Mania's Hammer Drop with extra frames of the body's sheet:
+A0-A3 the wind-up (one frame each), A4 the burst as it sets off (3 frames),
+A5-A8 the drill (in turn, a frame each), and A9-AE the rebound off spikes
+(A9-AC shown 2, 2, 3 and 5 frames, then AD and AE in turn, 3 each). A
+character file with `stomp = 1` on Mighty's own slot and no other changes
+is the game's Mighty, wall cling and all, with the stomp: such a pack is
+listed in OPTIONS > EXTRA CHARACTERS like any other. The drop dash
 goes the way the character faces, or the way left or right is held.
 
 `hammer` is Amy's hammer spin from Sonic Origins Plus. It goes with

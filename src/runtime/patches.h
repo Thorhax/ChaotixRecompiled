@@ -133,7 +133,9 @@ inline constexpr uint32_t kM68kHooks[] = {
     kCamClampMax, kCamClampMin, kCamClampBottom,
     // Ring tether options (runtime/tether.h): tether::kCharsUpdate, kForce,
     // kClampBefore, kClampAfter, kPartnerSide and the kBothObjects compares.
-    0x889C10, 0x89138E, 0x891392, 0x8913A2, 0x891494,
+    0x889C10,
+    0x88FBBA, 0x88FC36,  // moves::kHurtTest, kHurtDone (runtime/moves.h, this fork)
+    0x89138E, 0x891392, 0x8913A2, 0x891494,
     0x896566, 0x898C48, 0x898E6C, 0x89A2C8, 0x89FF7A, 0x8A3266,
     kFillSplitX, kSoundRequest,
 };

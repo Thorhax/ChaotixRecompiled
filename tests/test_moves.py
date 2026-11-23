@@ -2,10 +2,14 @@
 """The extra moves (runtime/moves.h), measured in the game.
 
 Mighty in Botanic Base 1: a jump, and jump pressed again in the air.
-  - with the stomp: he stops dead (X velocity 0), falls at the stomp's speed or
-    more, lands sooner than the jump alone would, and hops (a short jump);
-  - with left or right held as well (on the move, as Sonic Mania's drop);
+  - with the stomp: he stops dead (X velocity 0), falls at the stomp's speed,
+    lands sooner than the jump alone would, and hops (a short jump);
+  - with left or right held as well (on the move, as Sonic Mania's drop),
+    a few frames later: the game has the press first, to cling to a wall;
     without the move the second press does nothing of the kind.
+  - the wall cling (state $20) is the same with the stomp on as without it;
+  - spikes (object $54 made under him) hurt a plain landing, but the stomp
+    lands on them unhurt and rebounds a full jump high.
 Usage: test_moves.py <chaotix_headless> <rom>
 """
 import subprocess
@@ -13,7 +17,8 @@ import sys
 
 HEADLESS, ROM = sys.argv[1], sys.argv[2]
 PLAYER = 0xAD48  # the player's object in Botanic Base 1
-STOMP_SPEED = 0x00099900
+STOMP_SPEED = 0x00100000
+WINDUP = 4  # moves::kStompWindup
 FAILED = []
 
 
@@ -60,8 +65,11 @@ check(plain[860][0] == 0x04, "a jump is state 04")
 plain_landing = landing(plain, 855)
 
 stomp = run("--moves", "0:1", *JUMP, *AGAIN)
-check(stomp[868][0] == 0x08 and stomp[868][1] == 0 and stomp[868][2] >= STOMP_SPEED,
-      "jump again in the air: straight down at the stomp's speed (y velocity %#x)" % stomp[868][2])
+# (Peeks are after the frame: the game's gravity, under 1/4 px, is on top of the hook's 0.)
+check(all(stomp[f][1] == 0 and 0 <= stomp[f][2] < 0x4000 for f in range(867, 867 + WINDUP)),
+      "jump again in the air: he stops dead for the wind-up (%d frames)" % WINDUP)
+check(stomp[867 + WINDUP][0] == 0x08 and stomp[867 + WINDUP][1] == 0 and stomp[867 + WINDUP][2] >= STOMP_SPEED,
+      "then straight down at the stomp's speed (y velocity %#x)" % stomp[867 + WINDUP][2])
 stomp_landing = landing(stomp, 866)
 check(stomp_landing < plain_landing - 10,
       "the stomp lands sooner (frame %d, the jump alone %d)" % (stomp_landing, plain_landing))
@@ -76,9 +84,34 @@ off = run(*JUMP, *AGAIN)
 check(all(off[f] == plain[f] for f in range(840, 960)), "without the move the second press changes nothing")
 
 held = run("--moves", "0:1", "--press", "850:c:12", "--press", "850:right:30", "--press", "866:c+right:3")
-check(held[868][1] == 0 and held[868][2] >= STOMP_SPEED,
-      "moving right with right held: the stomp still goes straight down (x velocity %#x, y velocity %#x)"
-      % (held[868][1] & 0xFFFFFFFF, held[868][2] & 0xFFFFFFFF))
+# (The game adds its air control, 1/16 px a frame, after the hook clears X.)
+# Jump let go at 869 starts it; then the wind-up.
+DROP = 869 + WINDUP + 1
+check(held[868][1] != 0 and abs(held[DROP][1]) <= 0x1000 and held[DROP][2] >= STOMP_SPEED,
+      "moving right with right held: no wall, so the stomp follows (x velocity %#x, y velocity %#x)"
+      % (held[DROP][1] & 0xFFFFFFFF, held[DROP][2] & 0xFFFFFFFF))
+
+# The wall cling: run left into the wall at x 141, jump, press jump again by
+# the wall. The game clings (state $20) at the same presses with the stomp on.
+for again in (916, 920, 924):
+    presses = ("--press", "850:left:150", "--press", "880:c:6", "--press", "%d:c+left:30" % again)
+    off_cling = any(v[0] == 0x20 for v in run(*presses).values())
+    on_cling = any(v[0] == 0x20 for v in run("--moves", "0:1", *presses).values())
+    check(off_cling and on_cling, "jump again at the wall (frame %d): he clings, the stomp on (%s) or off (%s)"
+          % (again, on_cling, off_cling))
+
+# Spikes: object $FF8040 made spikes ($54, pointing up) under him in his jump.
+SPIKES = []
+for addr, v in ((0x8046, 0), (0x8047, 0x54), (0x8068, 0), (0x8048, 264 >> 8), (0x8049, 264 & 255),
+                (0x804C, 1647 >> 8), (0x804D, 1647 & 255)):
+    SPIKES += ["--poke", "856:%04X:%02X" % (addr, v)]
+plain_spikes = run(*JUMP, *SPIKES)
+check(any(plain_spikes[f][0] == 0x12 for f in range(880, 930)), "a plain landing on the spikes hurts (state 12)")
+drop = run("--moves", "0:1", *JUMP, *SPIKES, "--press", "878:c:3")
+hit = next(f for f in range(879, 900) if drop[f][2] < 0)
+check(all(drop[f][0] != 0x12 for f in range(878, hit + 30)), "the stomp onto the spikes does not hurt")
+check(drop[hit][2] <= -0x60000, "and rebounds a full jump high (y velocity %#x)" % (drop[hit][2] & 0xFFFFFFFF))
+
 
 # The drop dash: jump, let go, hold jump again until landing.
 DASH_SPEED = 0x0C00  # ground speed, 8.8

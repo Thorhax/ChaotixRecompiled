@@ -54,23 +54,66 @@ void play(Machine& m, int who, uint8_t sound, uint8_t game_id) {
     else if (game_id) post_sound(m, game_id);
 }
 
+// It stops in the air (kStompWindup frames), then goes straight down.
+void start_stomp(Machine& m, int who, uint32_t obj) {
+    wr32(m, obj + kObjXVel, 0);
+    wr32(m, obj + kObjYVel, 0);
+    m.wram[(obj + kObjState) & 0xFFFF] = kStateFall;
+    m.move_state[who] |= kStomping;
+    m.glide[who].speed = 0;
+    play(m, who, kSoundStomp, 0);
+    LOGD("moves", "stomp: character %d", who);
+}
+
 void stomp(Machine& m, int who, uint32_t obj, uint32_t pad) {
     uint8_t& now = m.move_state[who];
     const uint8_t state = m.wram[(obj + kObjState) & 0xFFFF];
     const bool in_air = state == kStateJump || state == kStateFall;
+    // Machine::glide is Ray's; a character with the stomp has no glide, and
+    // keeps there the frames it waits to see whether the game clings to a
+    // wall (pitch), the frames left of spike safety after a landing (boost),
+    // whether it is rebounding off spikes (impulse), and the frames since the
+    // stomp or the rebound began (speed; the pack's frames follow it).
+    Machine::Glide& g = m.glide[who];
+    int16_t& wait = g.pitch;
+    int16_t& safe = g.boost;
+    if (safe > 0) --safe;
+    if (g.impulse && !in_air) g.impulse = 0;  // the rebound is over: landed, or hurt
+    if (((now & kStomping) || g.impulse) && g.speed < 0x7FFF) ++g.speed;
+    if (wait > 0) {
+        // The press went to the game: a wall it clings to (state $20), the
+        // ground or a hit ends the wait without a stomp.
+        if (!in_air || rd16(m, obj + kObjAnim) != kAnimBall) { wait = 0; return; }
+        // Jump let go (no cling without it held) or waited long enough: the
+        // stomp.
+        if (!(m.wram[(pad + 2) & 0xFFFF] & kJump) || --wait == 0) {
+            wait = 0;
+            start_stomp(m, who, obj);
+        }
+        return;
+    }
     if (now & kStomping) {
         if (in_air) {
+            wr32(m, obj + kObjXVel, 0);
+            if (g.speed < kStompWindup) {  // still winding up: it hangs in the air
+                wr32(m, obj + kObjYVel, 0);
+                return;
+            }
             // Something sent it back up (an enemy, a spring): the stomp is over.
-            if (int32_t(rd32(m, obj + kObjYVel)) < kStompSpeed / 2) {
+            if (g.speed > kStompWindup && int32_t(rd32(m, obj + kObjYVel)) < kStompSpeed / 2) {
                 now &= uint8_t(~kStomping);
                 return;
             }
-            wr32(m, obj + kObjXVel, 0);
+            // Straight down at one speed, as Sonic Mania's drop.
+            wr32(m, obj + kObjYVel, uint32_t(kStompSpeed));
             return;
         }
         now &= uint8_t(~kStomping);
         // Landed: the hop. A press the game sees this frame only.
         if (state == kStateGround || state == kStateRoll) {
+            // Spikes it came down on do not hurt, as in Sonic Mania, while it
+            // hops off them (hurt_blocked).
+            safe = kStompSafeFrames;
             m.wram[(pad + 3) & 0xFFFF] |= kJump;
             // And, as in Sonic Mania, the screen shakes and dust flies at the
             // feet (both only in the picture).
@@ -83,16 +126,16 @@ void stomp(Machine& m, int who, uint32_t obj, uint32_t pad) {
     }
     if (!in_air || rd16(m, obj + kObjAnim) != kAnimBall) return;
     uint8_t& pressed = m.wram[(pad + 3) & 0xFFFF];
-    // Whatever direction is held, as Sonic Mania's drop (it once needed none
-    // held; wanted on the move, 2026-11-23).
     if (!(pressed & kJump)) return;
+    // Whatever direction is held, as Sonic Mania's drop. But a press with
+    // left or right held is also how Mighty clings to a wall: the game has
+    // the press and a few frames to cling before the stomp.
+    if (m.wram[(pad + 2) & 0xFFFF] & kLeftRight) {
+        wait = kStompWaitFrames;
+        return;
+    }
     pressed &= uint8_t(~kJump);  // the press is the stomp's, not the game's
-    wr32(m, obj + kObjXVel, 0);
-    wr32(m, obj + kObjYVel, uint32_t(kStompSpeed));
-    m.wram[(obj + kObjState) & 0xFFFF] = kStateFall;
-    now |= kStomping;
-    play(m, who, kSoundStomp, 0);
-    LOGD("moves", "stomp: character %d", who);
+    start_stomp(m, who, obj);
 }
 
 void wr16(Machine& m, uint32_t off, uint16_t v) {
@@ -355,6 +398,56 @@ void tails_flight(Machine& m, int who, uint32_t obj, uint32_t pad) {
 
 } // namespace
 
+namespace {
+constexpr uint32_t kObjBlink = 0x30;  // word: frames left of blinking after a hit
+
+// Which character (0 the player, 1 the partner) obj is, if the stomp keeps
+// it from harm just now; -1 if none.
+int hurt_blocked(const Machine& m, uint16_t obj) {
+    for (int who = 0; who < 2; ++who) {
+        if (rd16(m, who ? tether::kPartnerObj : tether::kPlayerObj) != obj) continue;
+        const unsigned character = (rd16(m, kCharacterId[who]) >> 2) & 7;
+        if (!(m.move_sets[character] & kStomp) || (m.move_sets[character] & kRayGlide)) return -1;
+        return (m.move_state[who] & kStomping) || m.glide[who].boost > 0 ? who : -1;
+    }
+    return -1;
+}
+} // namespace
+
+void on_hurt_test(Machine& m, m68k::State* c) {
+    m.hurt_masked = 0;
+    if (!any(m) || rd16(m, patches::kGameMode) != kModeLevel) return;
+    const uint16_t obj = uint16_t(c->a[0]);
+    if (!obj || rd16(m, obj + kObjBlink) != 0) return;
+    const int who = hurt_blocked(m, obj);
+    if (who < 0) return;
+    wr16(m, obj + kObjBlink, 1);
+    m.hurt_masked = obj;
+    Machine::Glide& g = m.glide[who];
+    if (g.impulse) return;  // rebounding already: only kept from harm
+    // As in Sonic Mania, it bounces back up off what would have hurt it
+    // (spikes), a full jump high, curled.
+    const bool landing = (m.move_state[who] & kStomping) != 0;
+    m.move_state[who] &= uint8_t(~kStomping);
+    g.impulse = 1;
+    g.boost = kStompSafeFrames;
+    g.speed = 0;
+    wr32(m, obj + kObjXVel, 0);
+    wr32(m, obj + kObjYVel, uint32_t(-kStompRebound));
+    m.wram[(obj + kObjState) & 0xFFFF] = kStateFall;
+    if (landing) {
+        m.shake = kStompShakeFrames;
+        play(m, who, kSoundStompLand, 0);
+    }
+    LOGD("moves", "stomp: rebound off a hurt, object %04X", obj);
+}
+
+void on_hurt_done(Machine& m) {
+    if (!m.hurt_masked) return;
+    wr16(m, m.hurt_masked + kObjBlink, 0);
+    m.hurt_masked = 0;
+}
+
 void on_chars_done(Machine& m) {
     if (rd16(m, patches::kGameMode) != kModeLevel) return;
     const uint32_t objs[2] = {rd16(m, tether::kPlayerObj), rd16(m, tether::kPartnerObj)};
@@ -390,6 +483,27 @@ int extra_frame(const Machine& m, int who, int bank, int frame) {
             return kTailsBallFirst + step % kTailsBallPoses;
         return -1;
     }
+    if (int(character) == bank && (m.move_sets[character] & kStomp) && !(m.move_sets[character] & kRayGlide)) {
+        const Machine::Glide& g = m.glide[who];
+        const int t = g.speed;
+        if (m.move_state[who] & kStomping) {
+            // Sonic Mania's Drill Dive: the shell flattens (a frame each),
+            // the burst as it sets off, then the drill, two frames turn about.
+            if (t < kStompWindup) return kStompFirst + t;
+            if (t < kStompWindup + kStompBurst) return kStompFirst + 4;
+            return kStompFirst + 5 + (t - kStompWindup - kStompBurst) % 4;
+        }
+        if (g.impulse) {
+            // And its Unspin, off the spikes: uncurling, then arms out.
+            static constexpr int kUnspin[] = {2, 2, 3, 5};
+            int at = t;
+            for (int i = 0; i < 4; ++i) {
+                if (at < kUnspin[i]) return kStompUnspinFirst + i;
+                at -= kUnspin[i];
+            }
+            return kStompUnspinFirst + 4 + (at / 3) % 2;
+        }
+    }
     if (int(character) != bank || !(m.move_sets[character] & kHammer) || (m.move_sets[character] & kRayGlide)) return -1;
     const int32_t left = m.glide_fall[who];
     if (left <= 0 || left > kHammerFrames) return -1;
@@ -415,6 +529,7 @@ bool any(const Machine& m) {
 void on_chars_update(Machine& m) {
     if (!any(m) || rd16(m, patches::kGameMode) != kModeLevel) {
         m.move_state[0] = m.move_state[1] = 0;
+        m.glide[0] = m.glide[1] = Machine::Glide{};  // the stomp's wait and safety too
         return;
     }
     const uint32_t objs[2] = {rd16(m, tether::kPlayerObj), rd16(m, tether::kPartnerObj)};
@@ -428,6 +543,7 @@ void on_chars_update(Machine& m) {
         if (!objs[who] || !set || computer || (who == 1 && objs[1] == objs[0])) {
             m.move_state[who] = 0;
             if (set & (kHammer | kTailsFlight)) m.glide_fall[who] = 0;
+            if (!(set & kRayGlide)) m.glide[who] = Machine::Glide{};
             continue;
         }
         if (set & kRayGlide) { ray_glide(m, who, objs[who], pads[who]); continue; }
