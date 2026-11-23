@@ -17,7 +17,9 @@ namespace chaotix::audio {
 namespace {
 
 // The files' names, by moves::kSoundFly....
-const char* const kNames[moves::kSoundKinds] = {nullptr, "tails_flight", "tails_flight_tired"};
+const char* const kNames[moves::kSoundKinds] = {nullptr,       "tails_flight",     "tails_flight_tired",
+                                                 "glide_up",    "glide_down",       "drop_dash_charge",
+                                                 "drop_dash_release", "hammer"};
 
 // A file at full scale against the game's own sound effects: Sonic Mania's
 // flight, played at this, is about as loud as the game's FM effects.
@@ -72,6 +74,23 @@ void SoundMods::after_frame(Machine& m, size_t first_sample, float level) {
     attach(m);
     const size_t total = m.audio_out.size();
     const size_t frames = m.audio_enabled && first_sample <= total ? (total - first_sample) / 2 : 0;
+    // A sound played once: from its start, to its end; a later one on the
+    // same character takes its place.
+    for (size_t who = 0; who < shots_.size(); ++who) {
+        Voice& v = shots_[who];
+        const uint8_t want = m.move_shot[who];
+        m.move_shot[who] = moves::kSoundNone;
+        if (want >= moves::kSoundFirstShot && want < files_.size() && files_[want].frames) v = Voice{want, 0, 0};
+        if (!v.sound) continue;
+        const Track& t = files_[v.sound];
+        for (size_t k = 0; k < frames && v.pos < t.frames; ++k, ++v.pos)
+            for (int ch = 0; ch < 2; ++ch) {
+                int16_t& s = m.audio_out[first_sample + k * 2 + size_t(ch)];
+                const float add = float(t.samples[v.pos * 2 + size_t(ch)]) * kGain * level;
+                s = int16_t(std::clamp(int(s) + int(std::lround(add)), -32768, 32767));
+            }
+        if (v.pos >= t.frames) v = Voice{};
+    }
     for (size_t who = 0; who < voices_.size(); ++who) {
         Voice& v = voices_[who];
         uint8_t want = m.move_sound[who];

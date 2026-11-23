@@ -301,7 +301,13 @@ still lift, unless a pack has a `Sounds` folder (or `Mods/Sounds`) with
 and `tails_flight_tired.wav`, if there is one, once he is tired
 (audio/sound_mods.h). Files are as music files (PCM or float WAV, any rate),
 mixed at the sound effect volume; the game's own sound driver does not play
-them. Charmy shows his frame 03 while down is held (a pack's crouch).
+them.
+
+The same folder can give the other moves a sound: `glide_up.wav` and
+`glide_down.wav`, looped while the glide climbs and while it dives (the game
+has none); and, each played once, `drop_dash_charge.wav` and
+`drop_dash_release.wav` (in place of the spin dash's charge and release
+sounds the drop dash uses) and `hammer.wav` (the hammer's swing). Charmy shows his frame 03 while down is held (a pack's crouch).
 
 A file with a `[Moves]` section sets its slot's whole set: a move it does
 not list is off for that slot, whatever the MIGHTY STOMP option (OPTIONS > GAMEPLAY) says. Without

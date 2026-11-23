@@ -254,6 +254,7 @@ public:
     // it), and which of them the player has files for, which the moves then
     // leave the game's own sound out for. For the sound only: not in save states.
     uint8_t move_sound[2] = {};
+    uint8_t move_shot[2] = {};  // a sound played once (moves::kSoundDropCharge...), likewise taken and cleared
     uint8_t move_sound_files = 0;
     // The stomp's landing, for the picture only (runtime/moves.h; not in save
     // states, as nothing the machine does depends on it): frames of screen

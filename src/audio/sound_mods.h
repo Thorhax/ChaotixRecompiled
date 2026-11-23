@@ -13,8 +13,12 @@
 // hear them, so nothing it does depends on them, but a move leaves out its
 // own game sound when Machine::move_sound_files says the file is there.
 //
-// Files: "tails_flight.wav" (Tails flying) and "tails_flight_tired.wav" (too
-// tired to lift), in a pack's Sounds folder or Mods/Sounds.
+// A sound played once (Machine::move_shot) plays from its start to its end.
+//
+// Files, in a pack's Sounds folder or Mods/Sounds: looped, "tails_flight.wav"
+// (Tails flying), "tails_flight_tired.wav" (too tired to lift), "glide_up.wav"
+// (the glide climbing) and "glide_down.wav" (diving); once,
+// "drop_dash_charge.wav", "drop_dash_release.wav" and "hammer.wav" (the swing).
 #pragma once
 #include "audio/music_mods.h"
 #include <array>
@@ -47,8 +51,9 @@ private:
         size_t pos = 0;  // in frames of the file
         int missed = 0;  // frames in a row it was not asked for
     };
-    std::array<Track, 3> files_{};  // by moves::kSoundFly...; empty: none
-    std::array<Voice, 2> voices_{};  // the player's and the partner's
+    std::array<Track, 8> files_{};  // by moves::kSoundFly...; empty: none
+    std::array<Voice, 2> voices_{};  // the player's and the partner's looped sound
+    std::array<Voice, 2> shots_{};   // and their sound played once
 };
 
 } // namespace chaotix::audio

@@ -47,6 +47,13 @@ void post_sound(Machine& m, uint8_t id) {
         if (!m.zram[kSoundQueue + i]) { m.zram[kSoundQueue + i] = id; return; }
 }
 
+// A move's one-off sound: the pack's file (audio/sound_mods.h) if it has one,
+// else the game's own (none if 0).
+void play(Machine& m, int who, uint8_t sound, uint8_t game_id) {
+    if (m.move_sound_files & sound_bit(sound)) m.move_shot[who] = sound;
+    else if (game_id) post_sound(m, game_id);
+}
+
 void stomp(Machine& m, int who, uint32_t obj, uint32_t pad) {
     uint8_t& now = m.move_state[who];
     const uint8_t state = m.wram[(obj + kObjState) & 0xFFFF];
@@ -104,7 +111,7 @@ void drop_dash(Machine& m, int who, uint32_t obj, uint32_t pad) {
             now = uint8_t((now & ~kDashCount) | kDashReleased);  // let go: the charge is lost
         } else if ((now & kDashReleased) && count < kDropDashCharge) {
             now = uint8_t((now & ~kDashCount) | ((count + 1) << 2));
-            if (count + 1 == kDropDashCharge) post_sound(m, kSoundDashCharge);
+            if (count + 1 == kDropDashCharge) play(m, who, kSoundDropCharge, kSoundDashCharge);
         }
         return;
     }
@@ -132,7 +139,7 @@ void drop_dash(Machine& m, int who, uint32_t obj, uint32_t pad) {
                                       int8_t(left ? 1 : -1)};
     m.wram[(obj + kObjState) & 0xFFFF] = kStateRoll;
     wr16(m, obj + kObjAnim, kAnimBall);
-    post_sound(m, kSoundDashRelease);
+    play(m, who, kSoundDropRelease, kSoundDashRelease);
 }
 
 constexpr uint16_t kAnimGlide = 0x40;
@@ -277,6 +284,8 @@ void ray_glide(Machine& m, int who, uint32_t obj, uint32_t pad) {
     // nose points, from all the way up to all the way down. The game's step
     // adds a quarter of a frame to what is written, which stays in the frame.
     const int pose = g.pitch >= 0x70 ? 0 : g.pitch >= 0x58 ? 1 : g.pitch >= 0x40 ? 2 : g.pitch >= 0x28 ? 3 : 4;
+    // The wind of a pack's sound files, climbing or diving (audio/sound_mods.h).
+    if (now & kGlideOn) m.move_sound[who] = (now & kGlideDive) ? kSoundGlideDown : kSoundGlideUp;
     wr16(m, obj + kObjAnimFrame, uint16_t(pose << 8));
     // The state's code moves him by the X velocity and by its own small fall:
     // the rest of the fall is added to where he is.
@@ -296,6 +305,7 @@ void hammer(Machine& m, int who, uint32_t obj, uint32_t pad) {
         --left;
     } else if (m.wram[(pad + 3) & 0xFFFF] & kJump) {
         left = kHammerFrames;
+        play(m, who, kSoundHammer, 0);
         LOGD("moves", "hammer: character %d", who);
     }
 }

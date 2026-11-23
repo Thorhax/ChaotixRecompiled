@@ -144,7 +144,15 @@ inline constexpr int kFlightSoundEvery = 32;
 // tails_flight_tired.wav, looped while he flies: audio/sound_mods.h): what the
 // flight asks for in Machine::move_sound, and the bit of
 // Machine::move_sound_files saying the player has it, $5B then left out.
-enum : uint8_t { kSoundNone = 0, kSoundFly = 1, kSoundFlyTired = 2, kSoundKinds = 3 };
+// The glide's wind is looped too, as he climbs and as he dives (the game has
+// none). The other moves' sounds are played once, from Machine::move_shot:
+// the drop dash's charge and release (the game's $6C and $3C without a
+// file), and the hammer's swing (no game sound).
+enum : uint8_t {
+    kSoundNone = 0, kSoundFly = 1, kSoundFlyTired = 2, kSoundGlideUp = 3, kSoundGlideDown = 4,
+    kSoundDropCharge = 5, kSoundDropRelease = 6, kSoundHammer = 7,
+    kSoundKinds = 8, kSoundFirstShot = kSoundDropCharge,
+};
 inline constexpr uint8_t sound_bit(uint8_t sound) { return uint8_t(1u << sound); }
 inline constexpr int kCharmyWings = 0x6E;  // his frames from here on are the wings
 inline constexpr uint8_t kStateSpinDash = 0x10;
