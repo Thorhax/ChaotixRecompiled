@@ -192,7 +192,11 @@ still wait for the first picture before they run.
 **Cache.** Each picture is written as a PNG to
 `<user data>/Cache/Backdrops/v2-<first 12 hex digits of the ROM's SHA-1>/<zone>.png`
 (the patched image's SHA-1 when ROM patches are applied, since they can change
-the levels' art), and later starts load them at once. Delete the folder to
+the levels' art; in this fork, not when every byte they change is the
+characters' own data -- names and movement records, as the character packs
+patch -- since a picture hides the characters: then the pictures are made
+from the ROM as it is and share its folder, rather than each set of packs
+making them all again), and later starts load them at once. Delete the folder to
 make them again. They are derived from your ROM and stay on your device.
 `v2` since the tether is left out too (issue #37); `v1` pictures are not used.
 
@@ -298,9 +302,14 @@ that the picture shows the level rather than its starting edge (BOTANIC BASE
 1 starts against its left edge). They are made by the same worker, one at a
 time, ahead of the menu's own pictures and whatever MENU BACKGROUND is set
 to; a picture being made for a selection the player has moved on from is
-given up. While one is made the page shows another picture of the same place
+given up (in this fork: one being made for another stage is finished first,
+as a slow device never finished any otherwise). While one is made the page shows another picture of the same place
 if there is one, darkened, with LOADING over it. About 900 emulated frames:
-2.5-3 s on the development PC. They are cached beside the others as
+2.5-3 s on the development PC, about 14 s on a Nintendo Switch (the worker
+runs on the interpreters). `chaotix_headless --stage-backdrops DIR[:PLACE]`
+(this fork) makes every stage's picture ahead of time, named as the cache
+names them, pixel for pixel what the device makes: copied into the cache
+folder, LEVEL SELECT shows them all at once. They are cached beside the others as
 `stage_pPP_lL_tT.png` and at most 24 are kept as textures. The bonus stage
 comes out black (its picture is not in the frame buffer), which counts as no
 picture: the page then shows the menu's zone, darkened, instead.

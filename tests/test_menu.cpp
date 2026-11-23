@@ -2616,6 +2616,39 @@ TEST(showcase, stage_pictures_are_made_on_demand_and_cached) {
         CHECK(exact);  // the first, finished on the way
         b.shutdown();
     }
+    {
+        // This fork: patches that change only the characters (names, as the
+        // character packs' names.ips, and a movement record, as [Stats])
+        // share the plain ROM's pictures; any other change does not.
+        Rom named = rom;
+        std::vector<RomEdit> edits(2);
+        edits[0].offset = 0x32698;
+        edits[0].bytes = {'S', 'O', 'N', 'I', 'C'};
+        edits[1].offset = stat_record_offset(rom, 0) + 0x1E;
+        edits[1].bytes = {0x00, 0x40};
+        CHECK(named.apply_edits(edits, nullptr) > 0);
+        CHECK(!named.patched.empty());
+        MenuBackdrops b;
+        b.configure(named, dir);
+        b.update(d.renderer, false, true);
+        MenuBackdrops::Shown shown;
+        bool exact = false;
+        CHECK(b.stage(3, 2, 6, shown, &exact));
+        CHECK(exact);  // the plain ROM's, at once
+        b.shutdown();
+
+        Rom art = named;
+        std::vector<RomEdit> more(1);
+        more[0].offset = 0x100000;
+        more[0].bytes = {uint8_t(art.data[0x100000] ^ 0xFF)};
+        CHECK(art.apply_edits(more, nullptr) > 0);
+        MenuBackdrops c;
+        c.configure(art, dir);
+        c.update(d.renderer, false, true);
+        exact = true;
+        CHECK(!(c.stage(3, 2, 6, shown, &exact) && exact));  // a cache of its own: not made yet
+        c.shutdown();
+    }
     std::filesystem::remove_all(dir, ec);
 }
 #endif

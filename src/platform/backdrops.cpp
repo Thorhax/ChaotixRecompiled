@@ -1,10 +1,12 @@
 #include "platform/backdrops.h"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <utility>
 
 #include "renderer/image_io.h"
+#include "runtime/character_mods.h"
 #include "runtime/log.h"
 
 namespace chaotix {
@@ -15,13 +17,47 @@ namespace {
 // pictures are made again rather than kept.
 constexpr const char* kRecipe = "v2";  // v2: the tether is left out too
 
+// This fork: whether every byte the patches changed is the characters' own
+// data, which a picture cannot show (it hides the characters, the HUD and the
+// tether): their names (PLAYER SELECT's records, and the stage select's
+// strings, the ones the character packs patch) and their movement records
+// (character files' [Stats]), and the header checksum that follows them.
+bool only_character_data(const Rom& rom) {
+    if (rom.patched.empty() || rom.original.empty()) return false;
+    std::vector<std::pair<uint32_t, uint32_t>> mine = {
+        {0x18E, 0x190},                    // header checksum
+        {0x32678, 0x32678 + 7 * 32},       // PLAYER SELECT names (docs/CHARACTERS.md section 4)
+        {0x774E8, 0x774E8 + 10 * 11},      // stage select names
+    };
+    for (int id = 0; id < characters::kCount; ++id)
+        if (const uint32_t rec = stat_record_offset(rom, id)) mine.push_back({rec, rec + characters::kRecordSize});
+    for (const auto& [off, n] : rom.patched) {
+        const bool inside = std::any_of(mine.begin(), mine.end(), [&](const auto& r) { return off >= r.first && off + n <= r.second; });
+        if (!inside) return false;
+    }
+    return true;
+}
+
 } // namespace
 
 void MenuBackdrops::configure(const Rom& rom, const std::string& cache_root) {
     shutdown();
+    // The image actually played: a ROM patch can change the levels' art. But
+    // patches to the characters' names and stats only (the character packs)
+    // cannot: then the pictures are made from the user's ROM as it is and
+    // share its cache, rather than every set of packs making them all again
+    // (on the Switch, a picture is seconds of a worker's time).
+    std::string id = rom.patched.empty() ? rom.sha1 : rom.patched_sha1;
     rom_ = std::make_unique<Rom>(rom);
-    // The image actually played: a ROM patch can change the levels' art.
-    const std::string& id = rom.patched.empty() ? rom.sha1 : rom.patched_sha1;
+    if (only_character_data(rom)) {
+        auto base = std::make_unique<Rom>();
+        std::string err;
+        if (base->load_memory(rom.original.data(), std::min(rom.file_size, rom.original.size()), &err)) {
+            rom_ = std::move(base);
+            id = rom.sha1;
+            LOGI("backdrops", "the ROM patches change only the characters: pictures from the ROM as it is");
+        }
+    }
     dir_ = cache_root + std::string(kRecipe) + "-" + id.substr(0, 12) + "/";
     entries_.clear();
     for (const BackdropSpec& spec : backdrop_specs()) {

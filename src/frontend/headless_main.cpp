@@ -440,7 +440,7 @@ int main(int argc, char** argv) {
     std::string export_sheets_dir;  // --export-sheets DIR: every frame of each bank, after the run
     // Issue #8, the menu's art: --backdrop KEY|all DIR renders menu backdrops
     // (frontend/backdrop.h) as PNGs; --game-font PNG writes the font atlas.
-    std::string backdrop_key, backdrop_dir, game_font_png;
+    std::string backdrop_key, backdrop_dir, game_font_png, stage_backdrops;
     std::vector<std::string> patch_files;  // --patch FILE: IPS/BPS applied to the ROM in memory
     std::vector<std::string> character_dirs;  // --characters DIR: character mods (runtime/character_mods.h)
     // --mods-dir DIR: mod packs and loose files as the app reads its Mods
@@ -693,6 +693,11 @@ int main(int argc, char** argv) {
         // the run.
         else if (a == "--export-sheets") export_sheets_dir = next();
         else if (a == "--backdrop") { backdrop_key = next(); backdrop_dir = next(); }
+        // This fork: --stage-backdrops DIR[:PLACE] writes LEVEL SELECT's
+        // picture of every stage (or one place's), as the app makes and caches
+        // them (platform/backdrops.h), named as its cache names them: a cache
+        // folder made ahead of time, for a device slow to make them itself.
+        else if (a == "--stage-backdrops") stage_backdrops = next();
         else if (a == "--game-font") game_font_png = next();
         else if (a == "--layer") debug_layer = next() == "md" ? 1 : 2;  // md | 32x: one layer in the shots
         else if (a == "--sprites") want_sprites = true;
@@ -986,6 +991,40 @@ int main(int argc, char** argv) {
         std::printf("game font: %d glyphs of %dx%d\n", font.glyph_count, GameFont::kGlyphW, GameFont::kGlyphH);
         if (!write_png(game_font_png, font.pixels.data(), font.width, font.height, font.width)) return 1;
         if (backdrop_key.empty()) return 0;
+    }
+    if (!stage_backdrops.empty()) {
+        std::string dir = stage_backdrops;
+        int only = -1;
+        if (const size_t c = dir.rfind(':'); c != std::string::npos && c + 1 < dir.size()) {
+            only = std::atoi(dir.c_str() + c + 1);
+            dir.resize(c);
+        }
+        int made = 0, failed = 0;
+        for (uint16_t place = 0; place < 16; ++place) {
+            if (only >= 0 && place != only) continue;
+            for (uint16_t level = 0; level < 8; ++level)
+                for (uint16_t attime = 0; attime <= 6; attime += 2) {
+                    stage_select::Request r;
+                    r.place = place;
+                    r.level = level;
+                    r.attime = attime;
+                    if (!stage_select::valid(r)) continue;
+                    BackdropImage img;
+                    std::string why;
+                    const std::string key = stage_backdrop_key(place, level, attime);
+                    if (!render_backdrop(m->rom, stage_backdrop_spec(place, level, attime), img, &why)) {
+                        std::printf("%s: %s\n", key.c_str(), why.c_str());
+                        ++failed;
+                        continue;
+                    }
+                    write_png(dir + "/" + key + ".png", img.pixels.data(), img.width, img.height, img.width);
+                    std::printf("%s\n", key.c_str());
+                    std::fflush(stdout);
+                    ++made;
+                }
+        }
+        std::printf("stage backdrops: %d made, %d cannot be\n", made, failed);
+        return 0;
     }
     if (!backdrop_key.empty()) {
         int failed = 0;
