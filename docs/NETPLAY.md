@@ -159,6 +159,9 @@ game and is not yet checked at connect): please report it with both files.
   then on.
 - Android and iOS: built and working as far as tested in the build, not
   played on real devices.
+- Nintendo Switch (this fork): played between two consoles on a LAN, and
+  between a console and a PC (1.0.2; before it a Switch could host but not
+  join).
 
 ## How it works
 

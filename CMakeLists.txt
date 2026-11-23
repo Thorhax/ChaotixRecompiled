@@ -314,7 +314,7 @@ if(CHAOTIX_BUILD_FRONTEND)
         # releases were named after upstream's version (0.15.23-switch.2);
         # upstream's own, which save states are checked against, is still
         # PROJECT_VERSION.
-        set(CHAOTIX_SWITCH_VERSION "1.0.1")
+        set(CHAOTIX_SWITCH_VERSION "1.0.2")
         # No RomFS: the .nro must never carry the game. Players put their own
         # ROM on the SD card.
         nx_generate_nacp(

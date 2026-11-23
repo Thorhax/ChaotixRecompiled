@@ -56,6 +56,16 @@ void to_endpoint(const sockaddr* sa, size_t len, Endpoint& out) {
     len = len < out.bytes.size() ? len : out.bytes.size();
     std::memcpy(out.bytes.data(), sa, len);
     out.size = uint8_t(len);
+#if defined(__SWITCH__)
+    // The Switch's addresses carry their own length (sin_len), and its
+    // getaddrinfo gives a numeric IPv4 address 6 there: sent to as it is,
+    // only part of the address was used and a join never reached the host
+    // (found 2026-11-23). An IPv4 address is set to its full length.
+    if (len >= sizeof(sockaddr_in) && reinterpret_cast<const sockaddr*>(out.bytes.data())->sa_family == AF_INET) {
+        reinterpret_cast<sockaddr_in*>(out.bytes.data())->sin_len = uint8_t(sizeof(sockaddr_in));
+        out.size = uint8_t(sizeof(sockaddr_in));
+    }
+#endif
 }
 
 #ifndef CHAOTIX_NET_IPV4_ONLY
