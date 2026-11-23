@@ -4,8 +4,8 @@
 Mighty in Botanic Base 1: a jump, and jump pressed again in the air.
   - with the stomp: he stops dead (X velocity 0), falls at the stomp's speed or
     more, lands sooner than the jump alone would, and hops (a short jump);
-  - with left or right held, or without the move, the second press does
-    nothing of the kind.
+  - with left or right held as well (on the move, as Sonic Mania's drop);
+    without the move the second press does nothing of the kind.
 Usage: test_moves.py <chaotix_headless> <rom>
 """
 import subprocess
@@ -75,8 +75,10 @@ check(all(stomp[f][2] < STOMP_SPEED for f in range(stomp_landing + 1, hop_landin
 off = run(*JUMP, *AGAIN)
 check(all(off[f] == plain[f] for f in range(840, 960)), "without the move the second press changes nothing")
 
-held = run("--moves", "0:1", "--press", "850:c:12", "--press", "864:right:8", "--press", "866:c+right:3")
-check(all(held[f][2] < STOMP_SPEED for f in range(866, 880)), "left or right held: no stomp")
+held = run("--moves", "0:1", "--press", "850:c:12", "--press", "850:right:30", "--press", "866:c+right:3")
+check(held[868][1] == 0 and held[868][2] >= STOMP_SPEED,
+      "moving right with right held: the stomp still goes straight down (x velocity %#x, y velocity %#x)"
+      % (held[868][1] & 0xFFFFFFFF, held[868][2] & 0xFFFFFFFF))
 
 # The drop dash: jump, let go, hold jump again until landing.
 DASH_SPEED = 0x0C00  # ground speed, 8.8

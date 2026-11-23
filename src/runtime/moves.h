@@ -147,13 +147,13 @@ inline constexpr int kFlightSoundEvery = 32;
 // The glide's wind is looped too, as he climbs and as he dives (the game has
 // none). The other moves' sounds are played once, from Machine::move_shot:
 // the drop dash's charge and release (the game's $6C and $3C without a
-// file), and the hammer's swing (no game sound).
+// file), the hammer's swing, and the stomp's drop and landing (no game sound).
 enum : uint8_t {
     kSoundNone = 0, kSoundFly = 1, kSoundFlyTired = 2, kSoundGlideUp = 3, kSoundGlideDown = 4,
-    kSoundDropCharge = 5, kSoundDropRelease = 6, kSoundHammer = 7,
-    kSoundKinds = 8, kSoundFirstShot = kSoundDropCharge,
+    kSoundDropCharge = 5, kSoundDropRelease = 6, kSoundHammer = 7, kSoundStomp = 8, kSoundStompLand = 9,
+    kSoundKinds = 10, kSoundFirstShot = kSoundDropCharge,
 };
-inline constexpr uint8_t sound_bit(uint8_t sound) { return uint8_t(1u << sound); }
+inline constexpr uint16_t sound_bit(uint8_t sound) { return uint16_t(1u << sound); }
 inline constexpr int kCharmyWings = 0x6E;  // his frames from here on are the wings
 inline constexpr uint8_t kStateSpinDash = 0x10;
 inline constexpr uint8_t kStateFly = 0x2C;

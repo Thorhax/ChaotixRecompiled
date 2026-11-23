@@ -84,10 +84,15 @@ void MenuBackdrops::update(SDL_Renderer* renderer, bool wanted, bool menu_open) 
     control_.pause = !((wanted || demand >= 0) && menu_open);
     // The picture wanted first: a stage asked for, else a zone chosen. One
     // being made for anything else is given up (and made again later if it
-    // is still wanted).
+    // is still wanted), except another stage's: on a slow device a stage
+    // takes longer to make than a player looks at it before moving on, and
+    // given up each time none was ever finished. Finished, it is kept (on
+    // disk too), and the one asked for then is made next.
     int first = demand;
     if (first < 0 && wanted && chosen_ >= 0 && !entries_[size_t(chosen_)].texture) first = chosen_;
-    if (first >= 0 && worker_.joinable() && working_index_ != first) control_.cancel = true;
+    const bool stage_in_hand = working_index_ >= 0 && size_t(working_index_) < entries_.size() &&
+                               entries_[size_t(working_index_)].on_demand;
+    if (first >= 0 && worker_.joinable() && working_index_ != first && !stage_in_hand) control_.cancel = true;
     if (worker_.joinable() && !working_.load()) worker_.join();
     std::vector<Finished> done;
     {
@@ -128,6 +133,8 @@ void MenuBackdrops::update(SDL_Renderer* renderer, bool wanted, bool menu_open) 
         }
     }
     if (worker_.joinable() || !menu_open) return;
+    // (One that has just been finished above is not made again.)
+    if (demand >= 0 && (entries_[size_t(demand)].texture || entries_[size_t(demand)].failed)) demand = -1;
     if (demand >= 0) {
         start(size_t(demand));
         return;

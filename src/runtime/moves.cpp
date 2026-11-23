@@ -75,20 +75,23 @@ void stomp(Machine& m, int who, uint32_t obj, uint32_t pad) {
             // And, as in Sonic Mania, the screen shakes and dust flies at the
             // feet (both only in the picture).
             m.shake = kStompShakeFrames;
+            play(m, who, kSoundStompLand, 0);
             m.stomp_dust = Machine::StompDust{true, m.frame_count, int16_t(rd16(m, obj + kObjX)),
                                               int16_t(rd16(m, obj + kObjY)) + m.wram[(obj + kObjHalfHeight) & 0xFFFF], 0};
         }
         return;
     }
     if (!in_air || rd16(m, obj + kObjAnim) != kAnimBall) return;
-    const uint8_t held = m.wram[(pad + 2) & 0xFFFF];
     uint8_t& pressed = m.wram[(pad + 3) & 0xFFFF];
-    if (!(pressed & kJump) || (held & kLeftRight)) return;
+    // Whatever direction is held, as Sonic Mania's drop (it once needed none
+    // held; wanted on the move, 2026-11-23).
+    if (!(pressed & kJump)) return;
     pressed &= uint8_t(~kJump);  // the press is the stomp's, not the game's
     wr32(m, obj + kObjXVel, 0);
     wr32(m, obj + kObjYVel, uint32_t(kStompSpeed));
     m.wram[(obj + kObjState) & 0xFFFF] = kStateFall;
     now |= kStomping;
+    play(m, who, kSoundStomp, 0);
     LOGD("moves", "stomp: character %d", who);
 }
 

@@ -2587,6 +2587,35 @@ TEST(showcase, stage_pictures_are_made_on_demand_and_cached) {
         CHECK(!b.busy());
         b.shutdown();
     }
+    {
+        // Moving on to another stage while one is being made: it is finished
+        // (on a slow device none was ever finished when each was given up),
+        // then the stage looked at now is made.
+        MenuBackdrops b;
+        b.configure(rom, dir);
+        b.update(d.renderer, false, true);
+        MenuBackdrops::Shown shown;
+        bool exact = false, none = false;
+        for (int i = 0; i < 500 && b.making() != stage_backdrop_key(1, 1, 0); ++i) {
+            b.stage(1, 1, 0, shown, &exact, &none);
+            b.update(d.renderer, false, true);
+            SDL_Delay(2);
+        }
+        CHECK_STR(b.making(), stage_backdrop_key(1, 1, 0));
+        for (int i = 0; i < 20; ++i) {
+            b.stage(2, 1, 0, shown, &exact, &none);
+            b.update(d.renderer, false, true);
+        }
+        CHECK_STR(b.making(), stage_backdrop_key(1, 1, 0));  // not given up
+        for (int i = 0; i < 20000 && !(b.stage(2, 1, 0, shown, &exact, &none) && exact); ++i) {
+            b.update(d.renderer, false, true);
+            SDL_Delay(2);
+        }
+        CHECK(exact);
+        CHECK(b.stage(1, 1, 0, shown, &exact, &none));
+        CHECK(exact);  // the first, finished on the way
+        b.shutdown();
+    }
     std::filesystem::remove_all(dir, ec);
 }
 #endif

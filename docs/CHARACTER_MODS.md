@@ -307,7 +307,12 @@ The same folder can give the other moves a sound: `glide_up.wav` and
 `glide_down.wav`, looped while the glide climbs and while it dives (the game
 has none); and, each played once, `drop_dash_charge.wav` and
 `drop_dash_release.wav` (in place of the spin dash's charge and release
-sounds the drop dash uses) and `hammer.wav` (the hammer's swing). Charmy shows his frame 03 while down is held (a pack's crouch).
+sounds the drop dash uses), `hammer.wav` (the hammer's swing), and
+`stomp.wav` and `stomp_land.wav` (the stomp's drop and its landing). A pack
+holding only a `Sounds` folder gives them to the game's own characters (the
+stomp is Mighty's).
+
+Charmy shows his frame 03 while down is held (a pack's crouch).
 
 A file with a `[Moves]` section sets its slot's whole set: a move it does
 not list is off for that slot, whatever the MIGHTY STOMP option (OPTIONS > GAMEPLAY) says. Without

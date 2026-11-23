@@ -19,7 +19,8 @@ namespace {
 // The files' names, by moves::kSoundFly....
 const char* const kNames[moves::kSoundKinds] = {nullptr,       "tails_flight",     "tails_flight_tired",
                                                  "glide_up",    "glide_down",       "drop_dash_charge",
-                                                 "drop_dash_release", "hammer"};
+                                                 "drop_dash_release", "hammer", "stomp",
+                                                 "stomp_land"};
 
 // A file at full scale against the game's own sound effects: Sonic Mania's
 // flight, played at this, is about as loud as the game's FM effects.
