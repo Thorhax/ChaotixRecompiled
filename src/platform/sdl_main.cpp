@@ -580,6 +580,19 @@ uint16_t gamepad_buttons(SDL_Gamepad* g, const std::map<std::string, std::string
     return pad_input::mega_drive_buttons(g, binds);
 }
 
+// A gamepad joins the ones the game reads (once: opening one that is open
+// gives the same handle, and takes a reference that is given back).
+void open_pad(App& app, SDL_JoystickID id) {
+    SDL_Gamepad* g = SDL_OpenGamepad(id);
+    if (!g) return;
+    if (std::find(app.pads.begin(), app.pads.end(), g) != app.pads.end()) {
+        SDL_CloseGamepad(g);
+        return;
+    }
+    app.pads.push_back(g);
+    LOGI("input", "gamepad connected: %s", SDL_GetGamepadName(g));
+}
+
 // Which physical device drives a player: "auto", "keyboard", "padN", "none".
 uint16_t device_buttons(const App& app, int player) {
     const std::string& dev = app.cfg.device[player];
@@ -3123,6 +3136,14 @@ int main(int argc, char** argv) {
         }
         rom_path = run_setup_screen(app.window, app.renderer, app.store.root(), rom_search_dirs(app), err);
         if (rom_path.empty()) { SDL_Quit(); return 0; }
+        // The setup screen took the "connected" events of the pads there
+        // already, so the game would hear none of them until the next start
+        // (only the menus, from button events, worked): they are opened here.
+        int n = 0;
+        if (SDL_JoystickID* ids = SDL_GetGamepads(&n)) {
+            for (int i = 0; i < n; ++i) open_pad(app, ids[i]);
+            SDL_free(ids);
+        }
     }
     app.m = std::make_unique<Machine>();
     if (!app.m->load_rom(rom_path, &err)) {
@@ -3335,12 +3356,7 @@ int main(int argc, char** argv) {
             case SDL_EVENT_TEXT_INPUT: app.menu.on_text(e.text.text); break;
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN: handle_pad_button(app, e.gbutton.button); break;
             case SDL_EVENT_GAMEPAD_AXIS_MOTION: handle_pad_axis(app, e.gaxis); break;
-            case SDL_EVENT_GAMEPAD_ADDED:
-                if (SDL_Gamepad* g = SDL_OpenGamepad(e.gdevice.which)) {
-                    app.pads.push_back(g);
-                    LOGI("input", "gamepad connected: %s", SDL_GetGamepadName(g));
-                }
-                break;
+            case SDL_EVENT_GAMEPAD_ADDED: open_pad(app, e.gdevice.which); break;
             case SDL_EVENT_GAMEPAD_REMOVED:
                 for (size_t i = 0; i < app.pads.size(); ++i)
                     if (SDL_GetGamepadID(app.pads[i]) == e.gdevice.which) { app.triggers.erase(e.gdevice.which); SDL_CloseGamepad(app.pads[i]); app.pads.erase(app.pads.begin() + long(i)); break; }

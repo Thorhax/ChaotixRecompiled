@@ -449,6 +449,17 @@ inline bool SDL_SetWindowFullscreenMode(SDL_Window*, const c3::DisplayMode*) { r
 
 // Gamepads
 inline SDL_Gamepad* SDL_OpenGamepad(SDL_JoystickID device_index) { return SDL_GameControllerOpen(int(device_index)); }
+// The gamepads connected now, as what SDL_OpenGamepad takes (SDL 2's device
+// indices); SDL_free the list.
+inline SDL_JoystickID* SDL_GetGamepads(int* count) {
+    const int n = SDL_NumJoysticks();
+    auto* ids = static_cast<SDL_JoystickID*>(SDL_malloc(sizeof(SDL_JoystickID) * size_t(n > 0 ? n : 1)));
+    int k = 0;
+    for (int i = 0; ids && i < n; ++i)
+        if (SDL_IsGameController(i)) ids[k++] = SDL_JoystickID(i);
+    if (count) *count = k;
+    return ids;
+}
 inline void SDL_CloseGamepad(SDL_Gamepad* g) { if (g) SDL_GameControllerClose(g); }
 inline const char* SDL_GetGamepadName(SDL_Gamepad* g) { return g ? SDL_GameControllerName(g) : ""; }
 inline bool SDL_GetGamepadButton(SDL_Gamepad* g, SDL_GamepadButton b) { return g && SDL_GameControllerGetButton(g, b) != 0; }
