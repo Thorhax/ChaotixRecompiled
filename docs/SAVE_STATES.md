@@ -85,6 +85,10 @@ and the bonus stage measured 276, 220 and 278 KB).
 beside and renamed over, so a crash mid-write leaves the old one. A 164-byte
 header, then the raw state compressed, then bytes the host keeps with it (the
 app: where the replacement music was, which the game will not ask for again).
+In this fork the app's bytes end with the mod packs that change the game that
+were on: lines of `<pack folder>\t<title>\n`, their length (4 bytes,
+little-endian) and `CXP1`; a state without that tag predates it. Beside the
+state, `<state>.png` is the picture at half size for the STATES page.
 
 | Offset | Size | |
 |---|---|---|

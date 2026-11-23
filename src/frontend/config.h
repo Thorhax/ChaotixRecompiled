@@ -178,6 +178,9 @@ struct Config {
     // (1..kStateSlots).
     bool rewind = rewind_default();
     int state_slot = 1;
+    // This fork: a slot to load once the game has started again with the
+    // character packs it was saved with (LOAD STATE's SWITCH AND RESTART), 0 none.
+    int pending_state = 0;
     // [Lobby] Lobby shortcuts (issue #44, runtime/lobby.h): in story mode,
     // the partner (a character id, -1 the Combi Catcher's, -2 NONE --
     // lobby::kPartnerNone, issue #55: the attractions played as with PARTNER

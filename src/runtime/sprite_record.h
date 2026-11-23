@@ -77,6 +77,11 @@ struct SpriteDraw {
     // This fork: a draw the game did not make, added to the picture (the
     // stomp's dust, runtime/moves.h): composed on top, never compared.
     bool added = false;
+    // This fork: an added copy of an object in the widened special stage
+    // (SpriteRecorder::add_margin_objects): drawn `shift` px right, its
+    // pixels moved back by that, and only those outside [keep_left,
+    // keep_right], the columns the game's own draw was clipped to.
+    int16_t shift = 0, keep_left = 0, keep_right = 0;
 };
 
 constexpr uint32_t kWarpParamBytes = 16, kWarpSineBytes = 512;
@@ -103,6 +108,11 @@ struct SpriteImage {
     // extra frames, 80 and up, drawn in place of whichever frame the game
     // shows: runtime/moves.h).
     bool from_hotspot = false;
+    // This fork: drawn facing as it is even when the game mirrors the draw
+    // (a sheet's `keep_facing` frames, a single image's `.offset` with
+    // `keep_facing`): for a character the game shows from behind and mirrors
+    // to alternate the legs, whose replacement is not symmetrical.
+    bool keep_facing = false;
 };
 
 // A graphic drawn, for dumping: its name (bank and frame, or the hash), its
@@ -139,6 +149,10 @@ public:
     void set_pack(std::shared_ptr<const SpritePack> pack);
     const SpritePack* pack() const { return pack_.get(); }
     void shown(const Machine& m, const uint8_t*& fb, const uint8_t*& margin);
+    // Whether the buffer on display can be shown with the pack's pictures: false just after a state
+    // load until a buffer drawn since then is displayed (rewind runs on to one, 2026-11-22). True
+    // without a pack.
+    bool display_ready(const Machine& m) const;
     uint64_t pictures_composed = 0;  // displayed lists drawn with replacements or moves
 
     // The glide into a level's start (issue #136, start_glide.h): the
@@ -195,6 +209,10 @@ private:
     std::unique_ptr<SpriteLayer> layer_;
     bool glide_on_ = false;
     bool effects_on_ = false;
+    // The widened special stage: objects the game clips at its 4:3 rectangle
+    // are drawn into the margins as well (add_margin_objects).
+    bool margins_on_ = false;
+    void add_margin_objects(const Machine& m, SpriteList& list);
     void add_effects(const Machine& m, SpriteList& list);
     StartGlide glide_;
     std::vector<SpriteMove> moves_;  // for the displayed list, one per draw

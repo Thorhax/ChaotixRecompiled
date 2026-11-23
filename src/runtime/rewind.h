@@ -38,6 +38,8 @@ public:
     // the oldest snapshot, when there is nothing older; false and m untouched
     // when the buffer is empty.
     bool step_back(Machine& m);
+    // Puts m back to the newest snapshot, which stays the newest (false when there is none).
+    bool reload(Machine& m) { if (!has_newest_) return false; restore(m); return true; }
 
     size_t snapshots() const { return has_newest_ ? deltas_.size() + 1 : 0; }
     // Bytes held: the compressed deltas plus the working buffers.

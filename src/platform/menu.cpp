@@ -100,7 +100,7 @@ bool Menu::is_list_page(Page p) {
            p == Page::TimeAttack || p == Page::Cheats || p == Page::Video || p == Page::Sound ||
            p == Page::Input || p == Page::Extras || p == Page::Lobby || p == Page::Mods || p == Page::ModInfo ||
            p == Page::Music || p == Page::Speedrun || p == Page::Netplay ||
-           p == Page::Tether || p == Page::LevelSelect || p == Page::Characters;
+           p == Page::Tether || p == Page::LevelSelect || p == Page::Characters || p == Page::StateSwitch;
 }
 
 // Where BACK and Escape go from a page below another one.
@@ -135,6 +135,7 @@ void Menu::set_page(Page p) {
     else if (p == Page::Main) build_main();
     else if (p == Page::Options) build_options();
     else if (p == Page::Characters) build_characters();
+    else if (p == Page::StateSwitch) build_state_switch();
     else if (p == Page::Video) build_video();
     else if (p == Page::Sound) build_sound();
     else if (p == Page::Input) build_input();
@@ -172,6 +173,12 @@ void Menu::leave_mods() {
     if (!mods_dirty_) return;
     mods_dirty_ = false;
     if (hooks_.reload_mods) hooks_.reload_mods();
+}
+
+void Menu::offer_state_switch(int slot, std::vector<std::string> lines) {
+    switch_slot_ = slot;
+    switch_lines_ = std::move(lines);
+    set_page(Page::StateSwitch);
 }
 
 void Menu::open_front() {
@@ -233,6 +240,7 @@ std::string Menu::page_name() const {
     case Page::Cheats: return "cheats";
     case Page::States: return "states";
     case Page::StateKeys: return "statekeys";
+    case Page::StateSwitch: return "stateswitch";
     case Page::Lobby: return "lobby";
     case Page::Tether: return "gameplay";
     case Page::Speedrun: return "speedrun";
@@ -583,6 +591,11 @@ void Menu::build_states() {
         if (!why.empty()) return why;
         return hooks_.state_info ? hooks_.state_info(c->state_slot) : std::string();
     };
+    // This fork: the slot's picture and what it was saved with, above the rows.
+    auto details = [this, c] {
+        info_lines_ = hooks_.state_details ? hooks_.state_details(c->state_slot) : std::vector<std::string>{};
+    };
+    details();
     items_.push_back({"SAVE STATE", {}, [this, c](int step) {
         if (step != 0) return;
         close();
@@ -595,11 +608,12 @@ void Menu::build_states() {
     }});
     items_.push_back({"SLOT",
                       [c] { return std::to_string(c->state_slot); },
-                      [this, c, slot_note](int s) {
+                      [this, c, slot_note, details](int s) {
                           if (!s) return;
                           c->state_slot = (c->state_slot - 1 + s + kStateSlots) % kStateSlots + 1;
                           // The note says what the slot holds, so it follows.
                           items_[size_t(selected_)].note = slot_note();
+                          details();
                       },
                       slot_note()});
     items_.push_back({"REWIND",
@@ -607,6 +621,26 @@ void Menu::build_states() {
                       [c](int s) { if (s) c->rewind = !c->rewind; },
                       locked().empty() ? std::string("hold the rewind key or button") : locked()});
     items_.push_back({"BACK", {}, [this](int) { set_page(return_to_); }});
+}
+
+// This fork: LOAD STATE found the slot saved with other character packs
+// (offer_state_switch). It says which, and offers to switch to them and start
+// the game again, which then loads the slot.
+void Menu::build_state_switch() {
+    items_.clear();
+    info_lines_ = switch_lines_;
+    const int slot = switch_slot_;
+    if (hooks_.switch_state_packs) {
+        items_.push_back({hooks_.restart ? "SWITCH AND RESTART" : "SWITCH AND QUIT", {},
+                          [this, slot](int step) {
+                              if (step != 0) return;
+                              close();
+                              hooks_.switch_state_packs(slot);
+                          },
+                          hooks_.restart ? "turns those on, starts again and loads it"
+                                         : "turns those on and quits; the next start loads it"});
+    }
+    items_.push_back({"CANCEL", {}, [this](int step) { if (step == 0) close(); }});
 }
 
 // Rewind on or off, and the keys and buttons for save states and rewind
@@ -1553,6 +1587,7 @@ std::string pack_contents(const mod_packs::Pack& p) {
     if (p.patches) what.push_back("ROM patches");
     if (p.touch) what.push_back("touch controls");
     if (p.samples) what.push_back("drum samples");
+    if (p.sounds) what.push_back("sounds");
     std::string s;
     for (const auto& w : what) s += (s.empty() ? "" : ", ") + w;
     return s.empty() ? std::string("nothing yet") : s;
@@ -2420,6 +2455,7 @@ void Menu::draw_options(ui::Ui& g) {
                                                    : (keys_pad_ ? "2P GAMEPAD" : "2P KEYBOARD"))
                         : page_ == Page::Mods ? "MODS"
                         : page_ == Page::Characters ? "EXTRA CHARACTERS"
+                        : page_ == Page::StateSwitch ? "LOAD STATE"
                         : page_ == Page::Music ? "MUSIC PLAYER"
                         : page_ == Page::Netplay ? "NETPLAY"
                         : "OPTIONS";
@@ -2563,6 +2599,9 @@ void Menu::draw_options(ui::Ui& g) {
         const std::vector<mod_packs::Pack>* list = packs();
         if (page_ == Page::ModInfo && hooks_.mod_preview && list && mod_index_ < list->size())
             preview = hooks_.mod_preview((*list)[mod_index_], &preview_w, &preview_h);
+        if ((page_ == Page::States || page_ == Page::StateSwitch) && hooks_.state_preview && cfg_)
+            preview = hooks_.state_preview(page_ == Page::States ? cfg_->state_slot : switch_slot_, &preview_w,
+                                           &preview_h);
         const float pw = preview_w, ph = preview_h;
         const float max_info = std::max(info_line_h * 3, g.height() / 3);
         float text_w = column;

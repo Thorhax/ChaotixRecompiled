@@ -363,8 +363,16 @@ Known limits:
   belongs instead: `ring HH CX CY` gives the ring's centre in hand frame `HH`
   from that frame's hotspot, `at FF TX TY` where the centre goes while the
   body shows frame `FF`, from the body's hotspot; a draw with both known is
-  placed so. `#` starts a comment. Like a replacement, it changes only the
-  picture.
+  placed so. `hide FF` draws no hand at all while the body shows frame
+  `FF` (a ball a pack draws from extra frames for a character that holds the
+  ring there: the game draws none for its own balls). `#` starts a comment.
+  Like a replacement, it changes only the picture.
+- This fork: a sheet's description may have a line `keep_facing FF FF ...`,
+  and a single image's `.offset` file `keep_facing` after its two numbers:
+  those frames are drawn facing as they are even when the game mirrors the
+  draw. The special stage shows its runners from behind and mirrors every
+  second turn of the run to swap the legs; a replacement that already swaps
+  them, and is not symmetrical (a tail on one side), keeps its side so.
   Being drawn at the game's resolution, a replacement can be more detailed
   only within that resolution: high-resolution replacements would need the
   compositor to output more than 320 pixels, which is not done.

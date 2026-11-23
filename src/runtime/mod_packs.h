@@ -26,7 +26,8 @@ inline constexpr const char* kMusic = "Music";
 inline constexpr const char* kPatches = "Patches";
 inline constexpr const char* kTouch = "Touch";
 inline constexpr const char* kSamples = "Samples";
-inline constexpr const char* kKinds[] = {kTextures, kCharacters, kMusic, kPatches, kTouch, kSamples};
+inline constexpr const char* kSounds = "Sounds";
+inline constexpr const char* kKinds[] = {kTextures, kCharacters, kMusic, kPatches, kTouch, kSamples, kSounds};
 inline constexpr const char* kIniName = "mod.ini";
 
 // mod.ini: what the pack says about itself.
@@ -54,7 +55,7 @@ struct Pack {
     bool enabled = true;
     // Which kinds of mod it holds (a folder of that name with a file in it
     // other than a README).
-    bool textures = false, characters = false, music = false, patches = false, touch = false, samples = false;
+    bool textures = false, characters = false, music = false, patches = false, touch = false, samples = false, sounds = false;
     // mod.ini's `requires` names a newer version than this one.
     bool too_new = false;
     // This fork: the characters it has a file for in Characters ("MIGHTY"),

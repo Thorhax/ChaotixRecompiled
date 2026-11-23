@@ -213,6 +213,7 @@ bool Config::load(const std::string& path) {
         } else if (section == "Extras") {
             if (k == "Rewind") rewind = parse_bool(v, rewind);
             else if (k == "StateSlot") state_slot = std::clamp(std::atoi(v.c_str()), 1, kStateSlots);
+            else if (k == "PendingLoad") pending_state = std::clamp(std::atoi(v.c_str()), 0, kStateSlots);
         } else if (section == "Lobby") {
             if (k == "Shortcuts") lobby_shortcuts = parse_bool(v, lobby_shortcuts);
             else if (k == "Partner") lobby_partner = std::clamp(std::atoi(v.c_str()), lobby::kPartnerNone, 7);
@@ -372,6 +373,7 @@ bool Config::save(const std::string& path) const {
     std::fprintf(f, "Rewind = %s\n# The save state slot quick save and quick load use, 1-%d (States/ in this folder)\n",
                  rewind ? "true" : "false", kStateSlots);
     std::fprintf(f, "StateSlot = %d\n", state_slot);
+    if (pending_state) std::fprintf(f, "# The slot to load at the next start (switched character packs)\nPendingLoad = %d\n", pending_state);
     std::fprintf(f, "\n[Lobby]\n# Story mode: choose the partner and the time of day instead of the Combi Catcher and the clock.\n");
     std::fprintf(f, "# Partner: -1 the catcher's, else 0 Mighty 2 Knuckles 3 Charmy 4 Vector 5 Bomb 6 Heavy 7 Espio;\n");
     std::fprintf(f, "# -2 none (the attractions played as with [Tether] Partner = Solo, whatever that says).\n");

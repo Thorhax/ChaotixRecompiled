@@ -163,4 +163,91 @@ check(len(floating) > 20 and all(up[f][0x28] <= 1 for f in floating[8:]),
 let_go = glide_run(*AGAIN)
 check(let_go[868][7] == 0x24 and let_go[874][7] != 0x24, "jump let go ends it (state %02X)" % let_go[874][7])
 
+# Tails' flight (on Charmy's slot, which the character file gives a jump of
+# the others' kind): jump pressed again in a jump flies in Charmy's flying
+# state, sinking slowly; a press lifts him; he lands.
+import os
+import tempfile
+with tempfile.TemporaryDirectory(prefix="chaotix_tails_") as chars:
+    os.makedirs(os.path.join(chars, "Characters"))
+    with open(os.path.join(chars, "Characters", "charmy.ini"), "w") as f:
+        f.write("[Stats]\nabilities_a = 0x0D\nabilities_b = 0x42\njump = 0x0680\njump_release = 0x0400\n"
+                "[Moves]\ntails_flight = 1\n")
+
+    def tails_run(*presses):
+        out = subprocess.run(
+            [HEADLESS, "--rom", ROM, "--frames", "1100", "--stage", "300:0:1:0:3:7:0", "--characters",
+             os.path.join(chars, "Characters"), "--peek-every", "1:%04X:48" % PLAYER, "--press", "900:c:6", *presses],
+            capture_output=True, text=True, check=True).stdout
+        return {int(l.split()[1]): bytes.fromhex(l.split()[3]) for l in out.splitlines() if l.startswith("peek ")}
+
+    yv = lambda r, f: s32(int.from_bytes(r[f][0x1C:0x20], "big"))
+    tj = tails_run()
+    check(tj[906][7] == 0x04 and yv(tj, 906) < -0x40000, "Tails: a jump of his own (state %02X)" % tj[906][7])
+    tf = tails_run("--press", "915:c:2")
+    check(tf[920][7] == 0x2C, "jump again in the air flies (state %02X)" % tf[920][7])
+    sinking = [yv(tf, f + 1) - yv(tf, f) for f in range(950, 960) if tf[f][7] == 0x2C and tf[f + 1][7] == 0x2C]
+    # (Charmy's state adds its gravity unevenly from frame to frame: the mean.)
+    check(len(sinking) >= 8 and abs(sum(sinking) / len(sinking) - 0x800) <= 0x100,
+          "he sinks by 1/32 px a frame each frame on average (%s)" % [hex(d) for d in sinking])
+    tl = tails_run("--press", "915:c:2", "--press", "960:c:2")
+    check(yv(tl, 975) < yv(tf, 975) - 0x10000, "a press lifts him")
+    tland = next((f for f in sorted(tf) if f > 920 and tf[f][7] == 0x02), None)
+    check(tland is not None, "and he lands (at %s)" % tland)
+    with open(os.path.join(chars, "Characters", "charmy.ini"), "w") as f:
+        f.write("[Stats]\nabilities_a = 0x0D\nabilities_b = 0x42\njump = 0x0680\njump_release = 0x0400\n")
+    flat = tails_run("--press", "915:c:2")
+    check(flat[920][7] != 0x2C, "without the move the second press does not fly (state %02X)" % flat[920][7])
+
+    # A pack's own flight sound (audio/sound_mods.h): a 440 Hz tone as Sounds/tails_flight.wav is heard
+    # while he flies, and not before.
+    import math
+    import struct
+    with open(os.path.join(chars, "Characters", "charmy.ini"), "w") as f:
+        f.write("[Stats]\nabilities_a = 0x0D\nabilities_b = 0x42\njump = 0x0680\njump_release = 0x0400\n"
+                "[Moves]\ntails_flight = 1\n")
+    sounds = os.path.join(chars, "Sounds")
+    os.makedirs(sounds)
+    tone = b"".join(struct.pack("<h", int(12000 * math.sin(2 * math.pi * 440 * i / 44100))) for i in range(44100))
+    with open(os.path.join(sounds, "tails_flight.wav"), "wb") as f:
+        f.write(b"RIFF" + struct.pack("<I", 36 + len(tone)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 44100, 88200, 2, 16)
+                + b"data" + struct.pack("<I", len(tone)) + tone)
+
+    def audio(*extra):
+        wav = os.path.join(chars, "out.wav")
+        subprocess.run([HEADLESS, "--rom", ROM, "--frames", "960", "--stage", "300:0:1:0:3:7:0", "--characters",
+                        os.path.join(chars, "Characters"), "--press", "900:c:6", "--press", "915:c:2", "--wav", wav, *extra],
+                       capture_output=True, check=True)
+        with open(wav, "rb") as f:
+            d = f.read()
+        i, rate, ch = 12, 0, 0
+        while i < len(d) - 8:
+            n, s = d[i:i + 4], struct.unpack("<I", d[i + 4:i + 8])[0]
+            if n == b"fmt ":
+                ch, rate = struct.unpack("<HI", d[i + 10:i + 16])
+            if n == b"data":
+                return rate, ch, struct.unpack("<%dh" % (s // 2), d[i + 8:i + 8 + s])
+            i += 8 + s + (s & 1)
+
+    # Against a silent file (which leaves out the game's own flight sound too), the difference is the tone.
+    silent = os.path.join(chars, "Silent")
+    os.makedirs(silent)
+    with open(os.path.join(silent, "tails_flight.wav"), "wb") as f:
+        f.write(b"RIFF" + struct.pack("<I", 36 + 2000) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 44100, 88200, 2, 16)
+                + b"data" + struct.pack("<I", 2000) + bytes(2000))
+    rate, ch, plain = audio("--sounds-dir", silent)
+    _, _, own = audio("--sounds-dir", sounds)
+    per = rate / 60.0  # audio frames a video frame (near enough)
+    def span(a, f0, f1):
+        return a[int(f0 * per) * ch:int(f1 * per) * ch:ch]
+    before = max(abs(x - y) for x, y in zip(span(plain, 850, 912), span(own, 850, 912)))
+    check(before == 0, "the sound is not heard before he flies (largest difference %d)" % before)
+    d = [x - y for x, y in zip(span(own, 925, 955), span(plain, 925, 955))]
+    # The difference's strength at 440 Hz against its strength overall.
+    re = sum(v * math.cos(2 * math.pi * 440 * k / rate) for k, v in enumerate(d))
+    im = sum(v * math.sin(2 * math.pi * 440 * k / rate) for k, v in enumerate(d))
+    power = sum(v * v for v in d)
+    share = (re * re + im * im) * 2 / len(d) / power if power else 0
+    check(power > 0 and share > 0.5, "while he flies the file's tone is heard (%.0f%% of the difference at 440 Hz)" % (100 * share))
+
 sys.exit(1 if FAILED else 0)

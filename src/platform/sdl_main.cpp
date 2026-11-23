@@ -38,6 +38,7 @@ extern "C" void userAppExit(void) {
 
 #include "audio/music_mods.h"
 #include "audio/sample_mods.h"
+#include "audio/sound_mods.h"
 #include "audio/volumes.h"
 #include "frontend/config.h"
 #include "frontend/ghost.h"
@@ -99,6 +100,7 @@ extern "C" void userAppExit(void) {
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <set>
 #include <ctime>
 #include <filesystem>
 #include <memory>
@@ -129,6 +131,7 @@ struct App {
     std::unique_ptr<Machine> m;
     audio::MusicMods music;  // <user data>/Mods/Music
     audio::SampleMods samples;  // <user data>/Mods/Samples
+    audio::SoundMods sounds;    // <user data>/Mods/Sounds: the extra moves' own sounds
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
     SDL_Texture* texture = nullptr;
@@ -194,6 +197,7 @@ struct App {
     bool packs_restart = false;  // the list now differs from that
     struct Preview { SDL_Texture* texture = nullptr; float w = 0, h = 0; };
     std::map<std::string, Preview> mod_previews;  // by pack folder, loaded when first shown
+    std::map<int, Preview> state_previews;        // this fork: by slot, the picture saved with it
     // The TIME ATTACK and LEVEL SELECT cards' characters (issue #53), by id:
     // made from the ROM when first shown, with the sprite and character mods
     // (portrait_mods: their colours), and made again when those change.
@@ -349,6 +353,7 @@ struct App {
     // with the replacement music's place at each (the game does not ask for
     // music again, so a step back has to put it back too).
     RewindBuffer rewind;
+    int rewind_need = 4;  // frames a step runs after its load (rewind_step)
     std::map<uint64_t, std::vector<uint8_t>> rewind_music;
     bool rewinding = false;  // held this pass, and allowed
     // Save state pad buttons are polled, so a trigger works as well as a
@@ -388,6 +393,10 @@ struct App {
 // costs about 12 KB a snapshot, the special stage about 40 KB (measured with
 // chaotix_headless --rewind).
 constexpr int kRewindInterval = 2;
+// With a character pack, how far further back each step starts (rewind_step):
+// two of the game's pictures, which the special stage draws one in three
+// frames or fewer (levels: one in two). The step stops as soon as one is up.
+constexpr int kRewindCatchUp = 12;
 constexpr size_t kRewindMaxSnapshots = 60 * 60 / kRewindInterval;
 #if defined(SDL_PLATFORM_ANDROID) || defined(SDL_PLATFORM_IOS) || defined(__SWITCH__)
 constexpr size_t kRewindBudget = size_t(32) << 20;
@@ -811,6 +820,82 @@ std::string state_path(const App& app, int slot) {
     return app.store.root() + "States/chaotix_" + app.m->rom.sha1.substr(0, 8) + "_" + std::to_string(slot) + ".state";
 }
 
+// This fork: the picture beside a slot's state (half size), shown on the
+// SAVE STATES page.
+std::string state_picture_path(const App& app, int slot) { return state_path(app, slot) + ".png"; }
+
+// This fork: the character packs a state was saved with -- the packs on that
+// change the game itself (patches, character files), as their id and title --
+// kept after the music's position in the state's host bytes: "id\ttitle\n"
+// lines, then their length (4 bytes, little-endian) and "CXP1". A state
+// without the tag was saved before this (2026-11-22) and says nothing.
+constexpr char kPacksTag[4] = {'C', 'X', 'P', '1'};
+using StatePacks = std::vector<std::pair<std::string, std::string>>;
+
+StatePacks game_packs(const App& app) {
+    StatePacks out;
+    for (const auto& p : app.packs)
+        if (p.enabled && !p.loose && p.changes_game()) out.emplace_back(p.id, p.title());
+    return out;
+}
+
+std::vector<uint8_t> state_host_bytes(const App& app) {
+    std::vector<uint8_t> out = app.music.save_position();
+    std::string text;
+    for (const auto& [id, title] : game_packs(app)) text += id + "\t" + title + "\n";
+    out.insert(out.end(), text.begin(), text.end());
+    for (int i = 0; i < 4; ++i) out.push_back(uint8_t(text.size() >> (8 * i)));
+    out.insert(out.end(), kPacksTag, kPacksTag + 4);
+    return out;
+}
+
+// Splits host bytes into the music's and the packs (known: the tag is there).
+void split_host_bytes(const std::vector<uint8_t>& host, std::vector<uint8_t>& music, StatePacks& packs, bool& known) {
+    music = host;
+    packs.clear();
+    known = false;
+    const size_t n = host.size();
+    if (n < 8 || std::memcmp(host.data() + n - 4, kPacksTag, 4) != 0) return;
+    const size_t len = size_t(host[n - 8]) | size_t(host[n - 7]) << 8 | size_t(host[n - 6]) << 16 | size_t(host[n - 5]) << 24;
+    if (len > n - 8) return;
+    const std::string text(host.begin() + std::ptrdiff_t(n - 8 - len), host.begin() + std::ptrdiff_t(n - 8));
+    music.assign(host.begin(), host.begin() + std::ptrdiff_t(n - 8 - len));
+    known = true;
+    for (size_t at = 0; at < text.size();) {
+        size_t nl = text.find('\n', at);
+        if (nl == std::string::npos) nl = text.size();
+        const std::string line = text.substr(at, nl - at);
+        const size_t tab = line.find('\t');
+        if (!line.empty()) packs.emplace_back(line.substr(0, tab), tab == std::string::npos ? line : line.substr(tab + 1));
+        at = nl + 1;
+    }
+}
+
+// The packs of a state file, from its bytes; false when it does not say.
+bool file_state_packs(const std::vector<uint8_t>& bytes, StatePacks& packs) {
+    savestate::Info info;
+    if (!savestate::read_info(bytes, info, nullptr) || info.host_size > bytes.size()) return false;
+    const std::vector<uint8_t> host(bytes.end() - std::ptrdiff_t(info.host_size), bytes.end());
+    std::vector<uint8_t> music;
+    bool known = false;
+    split_host_bytes(host, music, packs, known);
+    return known;
+}
+
+bool same_packs(const StatePacks& a, const StatePacks& b) {
+    std::set<std::string> x, y;
+    for (const auto& p : a) x.insert(p.first);
+    for (const auto& p : b) y.insert(p.first);
+    return x == y;
+}
+
+std::string pack_titles(const StatePacks& packs) {
+    if (packs.empty()) return "the original characters";
+    std::string s;
+    for (const auto& p : packs) s += (s.empty() ? "" : ", ") + p.second;
+    return s;
+}
+
 // Why states and rewind cannot be used now, or empty when they can. Never in
 // a TIME ATTACK run: a record is set in one go, at the game's own speed.
 std::string states_locked(const App& app) {
@@ -887,7 +972,7 @@ void notice(App& app, const std::string& caption, const std::string& title, cons
 void save_state(App& app, int slot) {
     const std::string why = states_locked(app);
     if (!why.empty()) { notice(app, "SAVE STATE", why); return; }
-    const std::vector<uint8_t> bytes = savestate::save(*app.m, app.music.save_position(), int64_t(std::time(nullptr)));
+    const std::vector<uint8_t> bytes = savestate::save(*app.m, state_host_bytes(app), int64_t(std::time(nullptr)));
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::u8path(app.store.root() + "States"), ec);
     const std::string path = state_path(app, slot);
@@ -898,6 +983,29 @@ void save_state(App& app, int slot) {
     }
     LOGI("state", "slot %d saved at frame %llu to %s (%zu bytes)", slot, (unsigned long long)app.m->frame_count,
          path.c_str(), bytes.size());
+    // This fork: the picture, at half size, for the SAVE STATES page.
+    {
+        const int w = app.m->fb_width / 2, h = app.m->fb_height / 2;
+        std::vector<uint32_t> half(size_t(std::max(w, 0)) * size_t(std::max(h, 0)));
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const uint32_t* q = app.m->framebuffer + size_t(2 * y) * kScreenWidth + size_t(2 * x);
+                uint32_t r = 0, g = 0, b = 0;
+                for (uint32_t v : {q[0], q[1], q[kScreenWidth], q[kScreenWidth + 1]}) {
+                    r += v >> 16 & 0xFF;
+                    g += v >> 8 & 0xFF;
+                    b += v & 0xFF;
+                }
+                half[size_t(y) * size_t(w) + size_t(x)] = 0xFF000000u | (r / 4) << 16 | (g / 4) << 8 | (b / 4);
+            }
+        if (w > 0 && h > 0 && !write_png(state_picture_path(app, slot), half.data(), w, h, w))
+            LOGW("state", "cannot write %s", state_picture_path(app, slot).c_str());
+        auto it = app.state_previews.find(slot);
+        if (it != app.state_previews.end()) {
+            if (it->second.texture) SDL_DestroyTexture(it->second.texture);
+            app.state_previews.erase(it);
+        }
+    }
     notice(app, "SAVE STATE", "STATE " + std::to_string(slot) + " SAVED");
 }
 
@@ -948,12 +1056,38 @@ void load_state(App& app, int slot) {
     std::vector<uint8_t> host;
     if (!savestate::load(*app.m, bytes, &err, &host)) {
         LOGW("state", "slot %d: %s", slot, err.c_str());
+        // This fork: saved with other character packs (the same ROM and
+        // version): say which, and offer to switch to them and start again.
+        savestate::Info info;
+        StatePacks theirs;
+        if (savestate::read_info(bytes, info, nullptr) && info.rom_sha1 == app.m->rom.sha1 &&
+            info.game_version == savestate::game_version() && file_state_packs(bytes, theirs) &&
+            !same_packs(theirs, game_packs(app))) {
+            std::string missing;
+            for (const auto& [id, title] : theirs)
+                if (std::none_of(app.packs.begin(), app.packs.end(), [&](const mod_packs::Pack& p) { return p.id == id; }))
+                    missing += (missing.empty() ? "" : ", ") + title;
+            if (!missing.empty()) {
+                for (char& ch : missing) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+                notice(app, "LOAD STATE", name + " NOT LOADED", "IT NEEDS " + missing + " IN THE MODS FOLDER.");
+                return;
+            }
+            app.menu.offer_state_switch(slot, {name + " was saved with " + pack_titles(theirs) + ".",
+                                               "On now: " + pack_titles(game_packs(app)) + "."});
+            return;
+        }
         // The menu's font has capitals only.
         for (char& ch : err) ch = char(std::toupper(static_cast<unsigned char>(ch)));
         notice(app, "LOAD STATE", name + " NOT LOADED", err);
         return;
     }
-    app.music.load_position(host);
+    {
+        std::vector<uint8_t> music;
+        StatePacks packs;
+        bool known = false;
+        split_host_bytes(host, music, packs, known);
+        app.music.load_position(music);
+    }
     // A state saved in story mode (a DATA slot in FFE01C) is the game going
     // on as it was: a LEVEL SELECT session does not send it back to the
     // page. One saved in practice (NO SAVE, 0xFFFF) keeps the session.
@@ -981,6 +1115,76 @@ std::string state_info(const App& app, int slot) {
     return buf;
 }
 
+// This fork: the SAVE STATES page's lines about a slot.
+std::vector<std::string> state_details(const App& app, int slot) {
+    std::vector<uint8_t> bytes;
+    if (!savestate::read_file(state_path(app, slot), bytes)) return {"Slot " + std::to_string(slot) + " is empty."};
+    std::string when = state_info(app, slot);  // "SAVED 2026-11-22 07:30", as the SLOT row says
+    for (char& ch : when) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+    std::vector<std::string> out{"Slot " + std::to_string(slot) + ", " + when + "."};
+    StatePacks packs;
+    if (file_state_packs(bytes, packs)) {
+        out.push_back("Characters: " + pack_titles(packs) + ".");
+        if (!same_packs(packs, game_packs(app))) out.push_back("Not the ones on now: LOAD STATE offers to switch to them.");
+    }
+    return out;
+}
+
+SDL_Texture* state_preview(App& app, int slot, float* w, float* h) {
+    if (!app.renderer) return nullptr;
+    auto it = app.state_previews.find(slot);
+    if (it == app.state_previews.end()) {
+        App::Preview pv;
+        PngImage img;
+        std::vector<uint8_t> bytes;
+        // Only beside a state that is there (an old picture is not shown alone).
+        if (savestate::read_file(state_path(app, slot), bytes) &&
+            read_png(state_picture_path(app, slot), img, nullptr) && img.width > 0 && img.height > 0 &&
+            img.width <= 1024 && img.height <= 1024) {
+            if (SDL_Surface* s = SDL_CreateSurfaceFrom(img.width, img.height, SDL_PIXELFORMAT_ARGB8888,
+                                                       img.argb.data(), img.width * 4)) {
+                pv.texture = SDL_CreateTextureFromSurface(app.renderer, s);
+                SDL_DestroySurface(s);
+                if (pv.texture) {
+                    SDL_SetTextureScaleMode(pv.texture, SDL_SCALEMODE_LINEAR);
+                    pv.w = float(img.width);
+                    pv.h = float(img.height);
+                }
+            }
+        }
+        it = app.state_previews.emplace(slot, pv).first;
+    }
+    *w = it->second.w;
+    *h = it->second.h;
+    return it->second.texture;
+}
+
+void save_now(App& app);
+
+// This fork: turns on the character packs a slot was saved with (and off the
+// other ones that change the game), and starts the game again where it can,
+// which then loads the slot (Config::pending_state).
+void switch_state_packs(App& app, int slot) {
+    std::vector<uint8_t> bytes;
+    StatePacks packs;
+    if (!savestate::read_file(state_path(app, slot), bytes) || !file_state_packs(bytes, packs)) return;
+    std::set<std::string> want;
+    for (const auto& p : packs) want.insert(p.first);
+    for (size_t i = 0; i < app.packs.size(); ++i) {
+        const mod_packs::Pack& p = app.packs[i];
+        if (p.loose || !p.changes_game()) continue;
+        const bool on = want.count(p.id) != 0;
+        if (p.enabled != on) mod_packs::set_enabled(app.cfg.mod_order, app.packs, i, on);
+    }
+    app.cfg.pending_state = slot;
+    LOGI("state", "slot %d: switching to its character packs (%s) and starting again", slot, pack_titles(packs).c_str());
+    save_now(app);
+    // Where the program cannot start itself again it quits: the next start
+    // loads the slot.
+    if (app.menu_hooks_restart) app.restart = true;
+    app.running = false;
+}
+
 // One step back through the rewind buffer, and a frame run from there for a
 // picture, with the pad let go and the sound dropped. The game then carries
 // on from that frame when rewind is let go.
@@ -988,12 +1192,39 @@ void rewind_step(App& app) {
     // Nothing to go back to (just after a load, say): the game holds still
     // rather than running on with the pad let go.
     if (!app.rewind.snapshots()) return;
-    app.rewind.step_back(*app.m);
+    // A state load forgets which sprite drew which pixels, so with a
+    // character pack on the picture one frame after it still shows the
+    // original characters (2026-11-22). Then each step aims kRewindInterval
+    // frames before the one shown and starts from a snapshot far enough
+    // before that for a picture drawn since the load to be up by then: as far
+    // as the last step needed (two of the game's pictures: four frames in a
+    // level, more in the special stage), at most kRewindCatchUp.
+    const bool pack = app.sprites && app.sprite_pack;
+    uint64_t aim = 0;
+    if (!pack) {
+        app.rewind.step_back(*app.m);
+    } else {
+        const uint64_t shown = app.m->frame_count;
+        aim = shown > uint64_t(kRewindInterval) ? shown - uint64_t(kRewindInterval) : 0;
+        const uint64_t need = uint64_t(std::clamp(app.rewind_need, 2, kRewindCatchUp));
+        const uint64_t start = aim > need ? aim - need : 0;
+        while (app.rewind.newest_frame() > start && app.rewind.snapshots() > 1 && app.rewind.step_back(*app.m)) {}
+        if (app.m->frame_count != app.rewind.newest_frame()) app.rewind.reload(*app.m);
+    }
+    const uint64_t loaded = app.m->frame_count;
     auto it = app.rewind_music.find(app.m->frame_count);
     if (it != app.rewind_music.end()) app.music.load_position(it->second);
     app.achievements.forget_previous();
     app.m->input.pad[0] = app.m->input.pad[1] = 0;
     app.m->run_frame();
+    if (pack) {
+        uint64_t ready_at = app.sprites->display_ready(*app.m) ? app.m->frame_count : 0;
+        while (app.m->frame_count < aim) {
+            app.m->run_frame();
+            if (!ready_at && app.sprites->display_ready(*app.m)) ready_at = app.m->frame_count;
+        }
+        app.rewind_need = std::min(ready_at ? int(ready_at - loaded) + 1 : app.rewind_need + 4, kRewindCatchUp);
+    }
     app.m->audio_out.clear();
     app.m->music_events.clear();
 }
@@ -1205,6 +1436,7 @@ void netplay_begin(App& app, bool host) {
             app.music.set_volume(audio::mixed_percent(app.cfg.mod_music_volume, app.cfg.music_volume));
             app.music.after_frame(*app.m, app.net.first_sample);
             app.samples.after_frame(*app.m, app.net.first_sample);
+            app.sounds.after_frame(*app.m, app.net.first_sample, float(app.cfg.effects_volume) / 100.0f);
         }
     };
     net::SessionOptions o;
@@ -1892,7 +2124,9 @@ void update_sprite_recorder(App& app) {
     // (The stomp's dust is drawn by the recorder: runtime/moves.h.)
     const bool effects = std::any_of(std::begin(app.m->move_sets), std::end(app.m->move_sets),
                                      [](uint8_t s) { return (s & (moves::kStomp | moves::kDropDash)) != 0; });
-    const bool want = app.sprite_pack || app.cfg.dump_graphics || app.cfg.smooth_start || effects;
+    // The widened special stage draws its objects into the margins through
+    // the recorder too (SpriteRecorder::add_margin_objects).
+    const bool want = app.sprite_pack || app.cfg.dump_graphics || app.cfg.smooth_start || effects || app.m->wide_special;
     if (!want) app.sprites.reset();
     else if (!app.sprites) app.sprites = std::make_shared<SpriteRecorder>();
     if (app.sprites) {
@@ -2112,6 +2346,11 @@ void load_mods(App& app, bool force = false) {
     for (const auto& dir : sample_dirs) sample_files = app.samples.scan(dir);
     if (sample_files) LOGI("samples", "%d drum sample(s) replaced from %zu folder(s)", sample_files, sample_dirs.size());
     app.samples.attach(*app.m);
+    app.sounds = audio::SoundMods{};
+    int sound_files = 0;
+    for (const auto& dir : mod_folders(app, mod_packs::kSounds)) sound_files = app.sounds.scan(dir);
+    if (sound_files) LOGI("sounds", "%d move sound(s) from files", sound_files);
+    app.sounds.attach(*app.m);
     load_touch_skin(app, mods + "Touch", mod_folders(app, mod_packs::kTouch));
     load_tiles(app);
     // The characters' colours, from the ROM as it runs (patched or not).
@@ -2802,6 +3041,11 @@ int main(int argc, char** argv) {
         hooks.save_state = [&app](int slot) { save_state(app, slot); };
         hooks.load_state = [&app](int slot) { load_state(app, slot); };
         hooks.state_info = [&app](int slot) { return app.m ? state_info(app, slot) : std::string(); };
+        hooks.state_details = [&app](int slot) { return app.m ? state_details(app, slot) : std::vector<std::string>{}; };
+        hooks.state_preview = [&app](int slot, float* w, float* h) -> SDL_Texture* {
+            return app.m ? state_preview(app, slot, w, h) : nullptr;
+        };
+        hooks.switch_state_packs = [&app](int slot) { if (app.m) switch_state_packs(app, slot); };
         hooks.states_locked = [&app] { return app.m ? states_locked(app) : std::string(); };
         // Not during netplay: the music player holds the game, which a
         // session cannot.
@@ -3236,6 +3480,11 @@ int main(int argc, char** argv) {
             // A frame taller than 4:3 gets extra rows below instead.
             app.m->wide_extra_bottom = app.cfg.widescreen ? widescreen_rows(fa, patches::kMaxWideExtraBottom) : 0;
         }
+        // In and out of the widened special stage, which needs the recorder.
+        if (bool(app.sprites) != (app.sprite_pack || app.cfg.dump_graphics || app.cfg.smooth_start || app.m->wide_special ||
+                                  std::any_of(std::begin(app.m->move_sets), std::end(app.m->move_sets),
+                                              [](uint8_t s) { return (s & (moves::kStomp | moves::kDropDash)) != 0; })))
+            update_sprite_recorder(app);
         if (app.cli_stage_frame && app.m->frame_count >= app.cli_stage_frame && app.start_stage) {
             app.cli_stage_frame = 0;
             app.menu.close();
@@ -3351,6 +3600,7 @@ int main(int argc, char** argv) {
             app.music.set_volume(audio::mixed_percent(app.cfg.mod_music_volume, app.cfg.music_volume));
             app.music.after_frame(*app.m, first_sample);
             app.samples.after_frame(*app.m, first_sample);
+            app.sounds.after_frame(*app.m, first_sample, float(app.cfg.effects_volume) / 100.0f);
             follow_time_attack(app);
             follow_level_select(app);
             follow_speedrun(app);
@@ -3470,6 +3720,20 @@ int main(int argc, char** argv) {
             // skips them. Not during netplay, where nothing is pressed or held
             // for one side only (apply_title_hold): the menu is as it was.
             app.menu.set_title_ready(app.handed_over || app.net.on || !title_hold::before_title(*app.m));
+            // This fork: started again with the packs a state needs (LOAD
+            // STATE's SWITCH AND RESTART): it loads as soon as the title is up,
+            // as if the game had been started from it.
+            if (app.cfg.pending_state && !app.handed_over && !app.net.on && app.menu.on_title() &&
+                app.menu.title_ready()) {
+                const int slot = app.cfg.pending_state;
+                app.cfg.pending_state = 0;
+                if (!app.title_snapshot) app.title_snapshot = std::make_unique<Machine>();
+                *app.title_snapshot = *app.m;
+                app.handed_over = true;
+                app.menu.close();
+                load_state(app, slot);
+                save_now(app);
+            }
             app.backdrops.choose(app.cfg.menu_backdrop_zone());
             app.backdrops.update(app.renderer, app.cfg.menu_backdrop_on(), app.menu.open());
             MenuBackdrops::Shown zone;

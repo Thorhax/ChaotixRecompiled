@@ -248,6 +248,13 @@ public:
     uint8_t move_sets[8] = {};
     uint8_t move_state[2] = {};
     int32_t glide_fall[2] = {};  // Ray's glide: its fall speed, 16.16 px a frame (runtime/moves.h)
+    // A move's own sound, played from a pack's Sounds folder (audio/sound_mods.h)
+    // in place of the game's: what each character's move asks for this frame
+    // (moves::kSoundFly...; the player takes it after each frame and clears
+    // it), and which of them the player has files for, which the moves then
+    // leave the game's own sound out for. For the sound only: not in save states.
+    uint8_t move_sound[2] = {};
+    uint8_t move_sound_files = 0;
     // The stomp's landing, for the picture only (runtime/moves.h; not in save
     // states, as nothing the machine does depends on it): frames of screen
     // shake left, and the dust (where, in level pixels, and the frame it began).

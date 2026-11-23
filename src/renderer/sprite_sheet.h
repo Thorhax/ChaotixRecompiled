@@ -21,6 +21,7 @@
 // box. Neither is a value the game's graphics use (they stay below 0x80),
 // and both read as transparent when a sheet is loaded.
 #pragma once
+#include <set>
 #include "runtime/sprite_record.h"
 
 #include <array>
@@ -73,6 +74,9 @@ struct SheetLayout {
     int cell_w = 0, cell_h = 0;
     int hot_x = 0, hot_y = 0;    // the hotspot within every cell
     std::vector<SheetCell> cells;
+    // This fork: "keep_facing FF [FF...]": frames drawn facing as they are
+    // even when the game mirrors the draw (SpriteImage::keep_facing).
+    std::set<int> keep_facing;
 };
 
 // The banks of the ROM's bank table (ROM 0x0A0000) whose graphics are in the

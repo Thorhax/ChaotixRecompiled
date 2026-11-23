@@ -28,6 +28,7 @@ usage: test_md_text.py HEADLESS ROM
 import glob
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -120,6 +121,7 @@ class MdText(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.dir = tempfile.mkdtemp(prefix="chaotix_mdtext_")
+        cls.addClassCleanup(shutil.rmtree, cls.dir, True)
         dump = os.path.join(cls.dir, "dump")
         run("--dump-graphics", dump)
         cls.runs = runs_in(dump)
@@ -276,6 +278,7 @@ class DataLoadSlots(unittest.TestCase):
 
     def test_slot_headers_stay_replaced_while_the_panel_slides(self):
         d = tempfile.mkdtemp(prefix="chaotix_mdtext_headers_")
+        self.addCleanup(shutil.rmtree, d, True)
         self.run_slots("--frames", "2100", "--dump-graphics", os.path.join(d, "dump"))
         # A header: a run of 9 tiles under two rows of the panel's frame (the
         # same row of tiles, wider), the 9 tiles above it taken from those.
@@ -329,6 +332,7 @@ class DataLoadSlots(unittest.TestCase):
 
     def test_switching_slots_shows_no_unreplaced_picture(self):
         d = tempfile.mkdtemp(prefix="chaotix_mdtext_slots_")
+        self.addCleanup(shutil.rmtree, d, True)
         self.run_slots("--frames", "2100", "--dump-graphics", os.path.join(d, "dump"))
         # NEW: three runs of 7 tiles on one screen, each right below the one
         # before.

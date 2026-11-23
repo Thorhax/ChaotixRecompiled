@@ -287,6 +287,7 @@ bool read_info(const std::vector<uint8_t>& file, Info& info, std::string* error)
     info.frame = get64(p); p += 8;
     info.saved_unix = int64_t(get64(p));
     if (kHeaderSize + info.compressed_size + host != file.size()) return fail(error, "the save state is truncated or damaged");
+    info.host_size = host;
     return true;
 }
 

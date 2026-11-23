@@ -29,6 +29,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -75,7 +76,14 @@ public:
     }
     const Shift* ring_centre(int hand_bank, int hand_frame) const { return look(rings_, hand_bank, hand_frame); }
     const Shift* ring_place(int hand_bank, int body_frame) const { return look(places_, hand_bank, body_frame); }
-    size_t hand_shifts() const { return hands_.size() + places_.size(); }
+    size_t hand_shifts() const { return hands_.size() + places_.size() + hidden_.size(); }
+    // `hide FF`: no hand at all while the body shows frame FF (a ball the
+    // pack draws for a body that holds the ring: runtime/moves.h's extra
+    // frames), as the game draws none for its own balls.
+    void add_hand_hidden(int hand_bank, int body_frame) { hidden_.insert(uint32_t(hand_bank) << 8 | uint32_t(body_frame)); }
+    bool hand_hidden(int hand_bank, int body_frame) const {
+        return !hidden_.empty() && hand_bank >= 8 && body_frame >= 0 && hidden_.count(uint32_t(hand_bank) << 8 | uint32_t(body_frame));
+    }
 
 private:
     static const Shift* look(const std::unordered_map<uint32_t, Shift>& map, int bank, int frame) {
@@ -84,6 +92,7 @@ private:
         return it == map.end() ? nullptr : &it->second;
     }
     std::unordered_map<uint32_t, Shift> hands_, rings_, places_;
+    std::unordered_set<uint32_t> hidden_;
     std::unordered_map<uint32_t, SpriteImage> by_slot_;
     std::unordered_map<uint64_t, SpriteImage> by_hash_;
 };
@@ -117,6 +126,8 @@ public:
     void restart(int b);
     // Nothing known about buffer `b` (until it starts again).
     void forget(int b) { track_[b & 1].complete = false; }
+    // Whether buffer `b` was tracked since it last started (its replacements can be drawn).
+    bool tracked(int b) const { return track_[b & 1].complete; }
     // The machine's frame buffer writes and auto fills into the back buffer
     // `b`, before they are made; `draws` is how many draws its list has.
     void write(const Machine& m, int b, uint32_t off, uint32_t v, int size, bool overwrite, uint32_t draws);
@@ -167,7 +178,8 @@ private:
         const SpriteImage* image;
         uint64_t hash;
         uint32_t size;
-        bool operator==(const Key& o) const { return image == o.image && hash == o.hash && size == o.size; }
+        bool mirrored;  // a keep_facing image under a mirrored draw
+        bool operator==(const Key& o) const { return image == o.image && hash == o.hash && size == o.size && mirrored == o.mirrored; }
     };
     struct KeyHash {
         size_t operator()(const Key& k) const { return size_t(k.hash ^ (uint64_t(reinterpret_cast<uintptr_t>(k.image)) * 0x9E3779B97F4A7C15ull) ^ k.size); }

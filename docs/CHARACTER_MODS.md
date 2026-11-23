@@ -234,6 +234,7 @@ stomp = 1       ; jump again in the air to drop straight down
 drop_dash = 1   ; in a jump, hold jump again; landing starts a roll
 ray_glide = 1   ; jump again in the air and hold it to glide: forward dives, back pulls up
 hammer = 1      ; jump again in the air swings a hammer around the character
+tails_flight = 1 ; jump again in the air flies (Charmy's slot)
 ```
 
 As in Sonic Mania, the stomp's landing shakes the screen for a few frames
@@ -271,6 +272,36 @@ shown says how his nose points: Knuckles' body frames 58 to 5C stand for all
 the way up, up, level, down and all the way down, so a pack draws those five
 poses there. Landing keeps the speed he had (up to 12 pixels a frame)
 instead of the stop Knuckles' glide ends with.
+
+`tails_flight` is Tails' flight from Sonic 3 & Knuckles and Sonic Mania, for
+Charmy's slot, alone. Jump pressed again in a jump flies: he sinks slowly,
+and a press lifts him (until he climbs at 1 pixel a frame) for 8 seconds,
+after which he only sinks. It runs in Charmy's flying state ($2C), which
+shows his flight's frames, steers with left and right and lands. Charmy's
+own jump button is a flight burst, so the same file gives him the others'
+jump, roll and spin dash:
+
+```ini
+[Stats]
+abilities_a = 0x0D        ; jump, spin dash (and Charmy's bit 3)
+abilities_b = 0x42        ; roll, without bit 0 (Charmy's flight jump)
+jump = 0x0680
+jump_release = 0x0400
+```
+
+Charmy's own animation for that jump draws his flight's frames, so with the
+move on a pack shows the ball from extra frames of the body's sheet, 80 to 85
+(six turns of it), and the spin dash from 86 to 89, each for two frames.
+Charmy's own flying frames face the way he flies and are never mirrored, so
+the flight is shown from extra frames too, by the way he faces: 8A-8D
+right, 8E-91 left, and once he is tired 92-95 right, 96-99 left. The
+flight plays Charmy's flight sound ($5B) every 32 frames while he can
+still lift, unless a pack has a `Sounds` folder (or `Mods/Sounds`) with
+`tails_flight.wav`: then that file is played instead, looped while he flies,
+and `tails_flight_tired.wav`, if there is one, once he is tired
+(audio/sound_mods.h). Files are as music files (PCM or float WAV, any rate),
+mixed at the sound effect volume; the game's own sound driver does not play
+them. Charmy shows his frame 03 while down is held (a pack's crouch).
 
 A file with a `[Moves]` section sets its slot's whole set: a move it does
 not list is off for that slot, whatever the MIGHTY STOMP option (OPTIONS > GAMEPLAY) says. Without

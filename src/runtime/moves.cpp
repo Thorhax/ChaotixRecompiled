@@ -300,6 +300,46 @@ void hammer(Machine& m, int who, uint32_t obj, uint32_t pad) {
     }
 }
 
+void tails_flight(Machine& m, int who, uint32_t obj, uint32_t pad) {
+    uint8_t& now = m.move_state[who];
+    int32_t& flown = m.glide_fall[who];
+    uint8_t& state = m.wram[(obj + kObjState) & 0xFFFF];
+    uint8_t& held = m.wram[(pad + 2) & 0xFFFF];
+    uint8_t& pressed = m.wram[(pad + 3) & 0xFFFF];
+    if (!(now & kFlying)) {
+        const bool in_air = state == kStateJump || state == kStateFall;
+        if (!in_air) {
+            now = 0;
+            flown = 0;
+            return;
+        }
+        if ((now & kFlyUsed) || rd16(m, obj + kObjAnim) != kAnimBall || !(pressed & kJump)) return;
+        pressed &= uint8_t(~kJump);
+        now = uint8_t(kFlying | kFlyUsed);
+        flown = 0;
+        state = kStateFly;
+        LOGD("moves", "flight: character %d", who);
+    } else if (state != kStateFly) {
+        // Landed, hit or anything else: over.
+        now = 0;
+        flown = 0;
+        return;
+    }
+    int32_t yv = int32_t(rd32(m, obj + kObjYVel));
+    if (flown < kFlightFrames) {
+        if (flown % kFlightSoundEvery == 0 && !(m.move_sound_files & sound_bit(kSoundFly))) post_sound(m, kSoundFlight);
+        ++flown;
+    }
+    m.move_sound[who] = flown < kFlightFrames ? kSoundFly : kSoundFlyTired;
+    if ((pressed & kJump) && flown < kFlightFrames && yv >= kFlightClimb) now |= kFlyRising;
+    if ((now & kFlyRising) && (yv < kFlightClimb || flown >= kFlightFrames)) now &= uint8_t(~kFlyRising);
+    yv += ((now & kFlyRising) ? kFlightLift : kFlightSink) - kFlightGameGravity;
+    wr32(m, obj + kObjYVel, uint32_t(yv));
+    // Charmy's code starts a burst of its own from the button: it never sees it.
+    pressed &= uint8_t(~kJump);
+    held &= uint8_t(~kJump);
+}
+
 } // namespace
 
 void on_chars_done(Machine& m) {
@@ -317,9 +357,26 @@ void on_chars_done(Machine& m) {
     }
 }
 
-int extra_frame(const Machine& m, int who, int bank) {
+int extra_frame(const Machine& m, int who, int bank, int frame) {
     if (rd16(m, patches::kGameMode) != kModeLevel) return -1;
     const unsigned character = (rd16(m, kCharacterId[who]) >> 2) & 7;
+    if (int(character) == bank && (m.move_sets[character] & kTailsFlight) && frame < kCharmyWings) {
+        const uint32_t obj = rd16(m, who ? tether::kPartnerObj : tether::kPlayerObj);
+        if (!obj) return -1;
+        const uint8_t state = m.wram[(obj + kObjState) & 0xFFFF];
+        const int step = int(m.frame_count / kTailsHold);
+        if (state == kStateFly && (m.move_state[who] & kFlying)) {
+            const bool tired = m.glide_fall[who] >= kFlightFrames;
+            const bool left = (m.wram[(obj + kObjFlags) & 0xFFFF] & 0x08) != 0;
+            return kTailsFlyFirst + (tired ? 2 * kTailsFlyPoses : 0) + (left ? kTailsFlyPoses : 0) +
+                   (tired ? step / 2 : step) % kTailsFlyPoses;
+        }
+        if (state == kStateSpinDash) return kTailsBallFirst + kTailsBallPoses + step % kTailsSpinPoses;
+        if (rd16(m, obj + kObjAnim) == kAnimBall &&
+            (state == kStateJump || state == kStateFall || state == kStateRoll))
+            return kTailsBallFirst + step % kTailsBallPoses;
+        return -1;
+    }
     if (int(character) != bank || !(m.move_sets[character] & kHammer) || (m.move_sets[character] & kRayGlide)) return -1;
     const int32_t left = m.glide_fall[who];
     if (left <= 0 || left > kHammerFrames) return -1;
@@ -332,6 +389,7 @@ uint8_t by_name(const char* name) {
     if (n == "drop_dash") return kDropDash;
     if (n == "ray_glide") return kRayGlide;
     if (n == "hammer") return kHammer;
+    if (n == "tails_flight") return kTailsFlight;
     return 0;
 }
 
@@ -356,10 +414,11 @@ void on_chars_update(Machine& m) {
         const bool computer = who == 1 && tether::cpu_partner(m);
         if (!objs[who] || !set || computer || (who == 1 && objs[1] == objs[0])) {
             m.move_state[who] = 0;
-            if (set & kHammer) m.glide_fall[who] = 0;
+            if (set & (kHammer | kTailsFlight)) m.glide_fall[who] = 0;
             continue;
         }
         if (set & kRayGlide) { ray_glide(m, who, objs[who], pads[who]); continue; }
+        if (set & kTailsFlight) { tails_flight(m, who, objs[who], pads[who]); continue; }
         if (set & kStomp) stomp(m, who, objs[who], pads[who]);
         else m.move_state[who] &= uint8_t(~kStomping);
         if (set & kDropDash) drop_dash(m, who, objs[who], pads[who]);

@@ -73,6 +73,20 @@
 // drawn from the pack's extra frames (extra_frame). The
 // frames left are kept in Machine::glide_fall, which a character with the
 // glide uses for the glide and no other does.
+//
+// TAILS' FLIGHT (Sonic 3 & Knuckles, Sonic Mania): jump pressed again in a
+// jump flies. He sinks slowly (1/32 px a frame each frame, against the
+// game's 7/32); jump pressed again while he is not already rising faster
+// than 1 px a frame lifts him (1/8 px a frame each frame, until he is), for
+// kFlightFrames frames, after which he is tired and only sinks. His flight's
+// frames and its sound are this fork's (kTailsFlyFirst, kSoundFlight). It runs in
+// Charmy's flying state ($2C), which shows his flight's frames, steers with
+// left and right and lands as it should; the state's own gravity is taken
+// back each frame, and the jump button is kept from its code (which would
+// start one of Charmy's own bursts, state $2A). For his own jump the
+// character file gives Charmy's slot the abilities of the others (abilities
+// A bit 0 jump, bit 2 spin dash; B bit 6 roll, without bit 0, Charmy's
+// flight jump). The frames flown are kept in Machine::glide_fall.
 #pragma once
 #include <cstdint>
 
@@ -88,6 +102,7 @@ enum : uint8_t {
     kDropDash = 0x02,
     kRayGlide = 0x04,  // instead of the other two, not with them
     kHammer = 0x08,    // with the drop dash or alone, not with the glide
+    kTailsFlight = 0x10,  // alone
 };
 // A move by the name a character file's [Moves] section gives it; 0 if none.
 uint8_t by_name(const char* name);
@@ -102,7 +117,38 @@ enum : uint8_t {
     kGlideDive = 0x08,     // the nose is going down (else up)
     kGlideLeft = 0x10,     // the way it went off
     kGlideBack = 0x20,     // leaning back: the last of left and right held was against the way he goes
+    // Tails' flight (a character with it has no other move).
+    kFlying = 0x04,
+    kFlyRising = 0x08,     // lifting, until 1 px a frame upwards
+    kFlyUsed = 0x10,       // flown in this jump already
 };
+
+// Tails' flight (16.16 per frame): his sinking, his lift, the climb that ends
+// a lift, how long he can lift before he is tired, and the flying state's
+// own gravity (Charmy's, 7/32), which is taken back.
+inline constexpr int32_t kFlightSink = 0x0800, kFlightLift = -0x2000, kFlightClimb = -0x10000;
+inline constexpr int kFlightFrames = 480;
+inline constexpr int32_t kFlightGameGravity = 0x3800;
+// His ball and spin dash are a pack's extra frames (Charmy's own animations
+// for those draw his flight's frames): kTailsBallFirst and up, kTailsBallPoses
+// of them, then kTailsSpinPoses of the spin dash, each shown kTailsHold frames.
+inline constexpr int kTailsBallFirst = 0x80, kTailsBallPoses = 6, kTailsSpinPoses = 4, kTailsHold = 2;
+// His flight's frames by the way he faces (Charmy's own face the way he flies
+// and are never mirrored): kTailsFlyFirst and up, four facing right, four
+// left, then the same tired; and its sound (Charmy's flight burst's, $5B),
+// every kFlightSoundEvery frames while he can still lift.
+inline constexpr int kTailsFlyFirst = 0x8A, kTailsFlyPoses = 4;
+inline constexpr uint8_t kSoundFlight = 0x5B;
+inline constexpr int kFlightSoundEvery = 32;
+// A pack may have his own flight's sound instead (Sounds/tails_flight.wav and
+// tails_flight_tired.wav, looped while he flies: audio/sound_mods.h): what the
+// flight asks for in Machine::move_sound, and the bit of
+// Machine::move_sound_files saying the player has it, $5B then left out.
+enum : uint8_t { kSoundNone = 0, kSoundFly = 1, kSoundFlyTired = 2, kSoundKinds = 3 };
+inline constexpr uint8_t sound_bit(uint8_t sound) { return uint8_t(1u << sound); }
+inline constexpr int kCharmyWings = 0x6E;  // his frames from here on are the wings
+inline constexpr uint8_t kStateSpinDash = 0x10;
+inline constexpr uint8_t kStateFly = 0x2C;
 
 // Drop dash: frames of holding before it is charged, and its speeds (8.8).
 inline constexpr int kDropDashCharge = 20;
@@ -134,7 +180,9 @@ bool any(const Machine& m);
 // The pack's extra body frame to show for the player (who 0) or the partner
 // (1), whose body is bank `bank`, in place of the frame the game draws; -1
 // for none. Read by the sprite recorder: it changes the picture only.
-int extra_frame(const Machine& m, int who, int bank);
+// `frame` is the one the game draws (Charmy's wings, drawn apart from his
+// body, are left alone).
+int extra_frame(const Machine& m, int who, int bank, int frame = 0);
 
 // The game's frame goes: the characters ($889C10), then everything else,
 // starting at $88804A. What else there is tests for a touch with each

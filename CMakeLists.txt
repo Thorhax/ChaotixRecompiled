@@ -76,6 +76,7 @@ add_library(chaotix_runtime STATIC
     src/audio/music_mods.cpp
     src/audio/pwm_samples.cpp
     src/audio/sample_mods.cpp
+    src/audio/sound_mods.cpp
     src/audio/volumes.cpp
     src/renderer/image_io.cpp
     src/renderer/tile_pack.cpp
@@ -312,7 +313,7 @@ if(CHAOTIX_BUILD_FRONTEND)
         # after it (platforms/switch/README.md). Releases are named
         # <upstream>-switch.<n>; the homebrew menu has room for 15 letters,
         # so it shows <upstream>-sw.<n>.
-        set(CHAOTIX_SWITCH_REVISION 6)
+        set(CHAOTIX_SWITCH_REVISION 7)
         set(CHAOTIX_SWITCH_VERSION "${PROJECT_VERSION}-sw.${CHAOTIX_SWITCH_REVISION}")
         # No RomFS: the .nro must never carry the game. Players put their own
         # ROM on the SD card.

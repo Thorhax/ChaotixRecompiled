@@ -69,6 +69,7 @@ struct Info {
     int64_t saved_unix = 0;     // seconds since 1970, 0 if unknown
     size_t raw_size = 0;
     size_t compressed_size = 0;
+    size_t host_size = 0;       // the host's bytes, at the file's end
 };
 
 // A state file's bytes. `host` is kept alongside, untouched (the app stores

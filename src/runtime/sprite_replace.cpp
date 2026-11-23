@@ -209,6 +209,9 @@ struct SpriteLayer::Replay {
     uint8_t route;
     bool mark;    // the bytes are composed again (a replaced draw's)
     bool write;   // the bytes are drawn (not the original of a replaced draw)
+    // A margin copy (SpriteDraw::shift): its pixels moved back, only outside the kept columns.
+    int32_t shift = 0;
+    int32_t keep_left = 0, keep_right = 0;
 };
 
 SpriteLayer::SpriteLayer() = default;
@@ -311,7 +314,8 @@ void SpriteLayer::fill(const Machine& m, int b, uint32_t addr, uint32_t words, u
 }
 
 const std::vector<uint8_t>* SpriteLayer::graphic_for(const SpriteDraw& d, const uint8_t* g, const SpriteImage& image) {
-    const Key key{&image, d.hash, d.size};
+    const bool mirror = image.keep_facing && (d.flags & 1);
+    const Key key{&image, d.hash, d.size, mirror};
     auto it = graphics_.find(key);
     if (it == graphics_.end()) {
         std::vector<uint8_t> out;
@@ -324,6 +328,17 @@ const std::vector<uint8_t>* SpriteLayer::graphic_for(const SpriteDraw& d, const 
             placed.dx -= s16(g);
             placed.dy -= line_of(s16(g + 4));
             placed.from_hotspot = false;
+            use = &placed;
+        }
+        if (mirror && d.size >= 8) {
+            // Mirrored here so that the game's mirroring puts it back: a
+            // flipped draw puts column x at -1 - x, so the image mirrored and
+            // placed from -(corner) - width comes out where it stands unflipped.
+            if (use != &placed) placed = *use;
+            const int w = placed.width, gx0 = s16(g);
+            for (int y = 0; y < placed.height; ++y)
+                std::reverse(placed.px.begin() + y * w, placed.px.begin() + (y + 1) * w);
+            placed.dx = -2 * gx0 - placed.dx - w;
             use = &placed;
         }
         // This fork: the bonus stage draws the special stage's sprites of the
@@ -367,15 +382,26 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
     std::vector<const std::vector<uint8_t>*> rep(list.draws.size(), nullptr);
     // A hand's draw goes with the body of the same character (the same
     // colour offset) in this picture: SpritePack::hand_shift.
-    struct HandMove { bool on = false; int32_t dx = 0, dy = 0; };
+    struct HandMove { bool on = false; int32_t dx = 0, dy = 0; bool hide = false; };
     std::vector<HandMove> hand;
     if (pack && pack->hand_shifts()) {
         hand.assign(list.draws.size(), HandMove{});
         for (size_t j = 0; j < list.draws.size(); ++j) {
             const SpriteDraw& d = list.draws[j];
             if (!d.size || d.bank < 8 || d.bank > 15) continue;
-            for (const SpriteDraw& body : list.draws) {
-                if (body.bank != d.bank - 8 || body.colour != d.colour) continue;
+            // The body is the largest draw of the character's bank: Charmy's
+            // wings are a draw of the same bank and colour, before the body
+            // every other frame, and the ring followed them.
+            const SpriteDraw* found = nullptr;
+            for (const SpriteDraw& body : list.draws)
+                if (body.bank == d.bank - 8 && body.colour == d.colour && (!found || body.size > found->size))
+                    found = &body;
+            if (found) {
+                const SpriteDraw& body = *found;
+                if (pack->hand_hidden(d.bank, body.frame)) {
+                    hand[j] = HandMove{true, 0, 0, true};
+                    continue;
+                }
                 // In the body's own pixels: mirrored with it, and as large.
                 const int32_t bx = body.flags & 1 ? -1 : 1, by = body.flags & 2 ? -1 : 1;
                 const bool scaled = d.kind == SpriteKind::Scaled;
@@ -389,7 +415,6 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
                 } else if (const SpritePack::Shift* shift = pack->hand_shift(d.bank, body.frame)) {
                     hand[j] = HandMove{true, size(bx * shift->dx, d.sx), size(by * shift->dy, d.sy)};
                 }
-                break;
             }
         }
     }
@@ -437,7 +462,33 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
         Replay r{this, &t, uint32_t(std::min<size_t>(j, 0xFFFF)), d.route, false, true};
         const SpriteMove* mv = moves && j < moves->size() && (*moves)[j].on ? &(*moves)[j] : nullptr;
         const HandMove* hs = !hand.empty() && hand[j].on ? &hand[j] : nullptr;
-        if (d.added) {
+        if (d.added && d.shift) {
+            // A margin copy: moved back, and only where the game's own draw was clipped.
+            r.mark = true;
+            r.write = true;
+            r.shift = d.shift;
+            r.keep_left = d.keep_left;
+            r.keep_right = d.keep_right;
+            auto margin_sink = [](void* user, uint32_t o, uint8_t v) {
+                Replay& r = *static_cast<Replay*>(user);
+                const int32_t rel = int32_t(o) - int32_t(patches::kFbLineBase);
+                if (rel < 0) return;
+                const int line = rel / int32_t(patches::kFbLineStride);
+                const int col = rel % int32_t(patches::kFbLineStride) - r.shift;
+                if (line >= kActiveLines || (col >= r.keep_left && col <= r.keep_right)) return;
+                const uint32_t to = uint32_t(int32_t(o) - r.shift) & 0x1FFFF;
+                if (!in_picture(to)) return;
+                SpriteLayer& l = *r.layer;
+                const uint32_t k = place(r.route, to);
+                if (l.marked_[k] != l.pass_) {
+                    l.marked_[k] = l.pass_;
+                    l.marks_.push_back(k);
+                }
+                l.replay_[k] = v;
+                l.drawn_[k] = l.pass_;
+            };
+            rasterise_sprite(d, list.bytes(d), d.size, margin_sink, &r, warp);
+        } else if (d.added) {
             // Not in the emulated buffer: only drawn, on top.
             r.mark = true;
             r.write = true;
@@ -467,6 +518,7 @@ bool SpriteLayer::compose(const Machine& m, int b, const SpriteList& list, const
             r.write = false;
             rasterise_sprite(d, list.bytes(d), d.size, sink, &r, warp);
             r.write = true;
+            if (hs && hs->hide) continue;  // erased, and nothing in its place
             if (rep[j]) rasterise_sprite(at, rep[j]->data(), uint32_t(rep[j]->size()), sink, &r, warp);
             else rasterise_sprite(at, list.bytes(d), d.size, sink, &r, warp);
         } else {

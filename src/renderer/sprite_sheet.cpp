@@ -383,6 +383,12 @@ bool parse_sheet_sidecar(const std::string& text, SheetLayout& out, std::string*
                 out.hot_y = v[1];
                 have_hot = true;
             }
+        } else if (w[0] == "keep_facing") {
+            for (size_t i = 1; i < w.size(); ++i) {
+                int f = 0;
+                if (!parse_hex2(w[i], &f)) return fail("keep_facing: frames as two hex digits");
+                out.keep_facing.insert(f);
+            }
         } else if (w[0] == "frame") {
             SheetCell c;
             int r[4];
@@ -472,6 +478,7 @@ bool sheet_replacements(const SheetLayout& l, const uint8_t* px, int width, int 
         r.image.height = h;
         r.image.dx = left - bx;
         r.image.dy = top - by;
+        r.image.keep_facing = l.keep_facing.count(c.frame) != 0;
         if (c.frame >= 0x80) {
             // An extra frame has no graphic of its own to be measured from.
             r.image.dx = left - (c.x + l.hot_x);

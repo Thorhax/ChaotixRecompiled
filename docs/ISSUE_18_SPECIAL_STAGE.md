@@ -146,3 +146,15 @@ of 2.10, the slowest frame 1.9 ms instead of 4.7. `special_stage_runs_recompiled
 and `lockstep_special_stage_variables` keep it that way; a sweep of 33 lockstep
 runs (all special stages, levels, bonus stage, hub, random input) is
 bit-identical.
+
+## Objects in the margins (this fork, 2026-11-22)
+
+The objects (rings, spheres, bombs: the scaled blitter) are placed around the
+native centre and clipped by the game at its own rectangle, so the widened
+margins showed the tube without them. The sprite recorder now adds, for each
+object near an edge, a copy drawn `special_shift` px right inside a clip from
+0, whose pixels are moved back by that as the tube's are, and only where the
+game's own draw was clipped (`SpriteRecorder::add_margin_objects`,
+`SpriteDraw::shift`). It is output only: the game, lockstep and save states
+are unchanged. The app keeps the recorder on in the widened stage for it.
+

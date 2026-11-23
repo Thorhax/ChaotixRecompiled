@@ -12,6 +12,7 @@ usage: test_rom_patches.py HEADLESS ROM RECOMP_TABLES_CPP
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,6 +46,7 @@ class RomPatches(unittest.TestCase):
             cls.rom = f.read()
         cls.rom_code, cls.sh2 = tables()
         cls.dir = tempfile.mkdtemp(prefix="chaotix_patch_")
+        cls.addClassCleanup(shutil.rmtree, cls.dir, True)
 
     def run_patched(self, name, records, frames=900):
         path = os.path.join(self.dir, name + ".ips")

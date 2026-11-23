@@ -200,7 +200,7 @@ void SpriteRecorder::hook(const Machine& m, const sh2::State& c, uint32_t pc) {
     // This fork: a move with a look of its own (the hammer) shows a pack's
     // extra frame in place of the frame the game draws. Output only.
     if (pack_ && d.bank >= 0 && d.bank < 8 && (d.colour == 0x12 || d.colour == 0x24)) {
-        const int extra = moves::extra_frame(m, d.colour == 0x24 ? 1 : 0, d.bank);
+        const int extra = moves::extra_frame(m, d.colour == 0x24 ? 1 : 0, d.bank, d.frame);
         if (extra >= 0 && pack_->has(d.bank, extra)) d.frame = int16_t(extra);
     }
     list.draws.push_back(d);
@@ -218,6 +218,8 @@ void SpriteRecorder::flipped(const Machine& m) {
     // next one is drawn: the layer must follow that one from its start.
     moves_on_ = false;
     if (effects_on_) add_effects(m, lists_[back ^ 1]);
+    margins_on_ = m.wide_special && m.special_shift > 0;
+    if (margins_on_) add_margin_objects(m, lists_[back ^ 1]);
     if (glide_on_) {
         const SpriteList& shown = lists_[back ^ 1];
         moves_on_ = glide_.picture(shown, moves_);
@@ -231,7 +233,7 @@ void SpriteRecorder::flipped(const Machine& m) {
 }
 
 void SpriteRecorder::update_layer() {
-    const bool want = pack_ || effects_on_ || (glide_on_ && glide_.watching());
+    const bool want = pack_ || effects_on_ || margins_on_ || (glide_on_ && glide_.watching());
     if (!want) layer_.reset();
     else if (!layer_) layer_ = std::make_unique<SpriteLayer>();
 }
@@ -256,6 +258,33 @@ void SpriteRecorder::set_effects(bool on) {
 // kDustBank, frames kDustFrame on), drawn small at the landing's two sides,
 // growing and drifting outward as it fades. Placed from the player's body as
 // this picture drew it, so it stays where the landing was as the camera moves.
+// The widened special stage (patches.h, kSpecialCentreAdds): its objects --
+// rings, spheres, bombs, drawn by the scaled blitter -- are placed around the
+// native centre and clipped by the game at its 4:3 rectangle, so the margins
+// beside the tube stayed empty of them (2026-11-22). Each one near an edge
+// gets a copy drawn special_shift px right, inside a clip from 0, whose
+// pixels are moved back as the tube's are (SpriteLayer::compose), where the
+// game's own draw was clipped. Output only.
+void SpriteRecorder::add_margin_objects(const Machine& m, SpriteList& list) {
+    constexpr int kReach = 96;  // px: the widest object, near and large
+    const int c = m.special_shift;
+    const size_t n = list.draws.size();
+    for (size_t i = 0; i < n; ++i) {
+        const SpriteDraw& o = list.draws[i];
+        if (o.added || o.kind != SpriteKind::Scaled || !o.size) continue;
+        if (o.x > o.clip.left + kReach && o.x < o.clip.right - kReach) continue;
+        SpriteDraw d = o;
+        d.added = true;
+        d.shift = int16_t(c);
+        d.keep_left = o.clip.left;
+        d.keep_right = o.clip.right;
+        d.x += c;
+        d.clip.left = 0;
+        d.clip.right = int16_t(320 + 2 * c);
+        list.draws.push_back(d);
+    }
+}
+
 void SpriteRecorder::add_effects(const Machine& m, SpriteList& list) {
     constexpr int kDustBank = 0x1C, kDustFrame = 0x08, kDustSteps = 6;
     const Machine::StompDust& dust = m.stomp_dust;
@@ -324,6 +353,10 @@ void SpriteRecorder::reset() {
     shown_key_ = ~0ull;
     glide_.reset();
     moves_on_ = false;
+}
+
+bool SpriteRecorder::display_ready(const Machine& m) const {
+    return !layer_ || layer_->tracked(m.mars.fb_display & 1);
 }
 
 void SpriteRecorder::set_pack(std::shared_ptr<const SpritePack> pack) {

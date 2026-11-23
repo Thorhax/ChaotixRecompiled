@@ -341,6 +341,14 @@ ROM patches and version of this program. None of it works during a TIME
 ATTACK run, so a record is always one unbroken run. See
 [docs/SAVE_STATES.md](docs/SAVE_STATES.md).
 
+In this fork a state also keeps a small picture of the game (beside it, as
+`<state>.png`) and which mod packs that change the game (patches, character
+files) were on. The STATES page shows the slot's picture, when it was saved
+and with which characters. Loading one saved with other packs says which,
+and offers to switch to them and start again (SWITCH AND RESTART on the
+Switch, SWITCH AND QUIT elsewhere); the state then loads by itself at the
+next start.
+
 OPTIONS > EXTRAS has RESET AWARDS, which asks twice before locking everything again.
 
 On-screen touch controls appear once the screen is touched (`TouchControls =

@@ -21,6 +21,7 @@
 #include "audio/music_mods.h"
 #include "audio/pwm_samples.h"
 #include "audio/sample_mods.h"
+#include "audio/sound_mods.h"
 #include "cpu/m68k/m68k_interp.h"
 #include "cpu/m68k/m68k_ops.h"
 #include "cpu/sh2/sh2_interp.h"
@@ -469,6 +470,7 @@ int main(int argc, char** argv) {
     std::vector<Peek> peeks;
     std::vector<std::string> music_dirs;  // --music-dir: music replaced by files (audio/music_mods.h)
     std::vector<std::string> sample_dirs;  // --samples-dir: PWM samples replaced by files (audio/sample_mods.h)
+    std::vector<std::string> sound_dirs;   // --sounds-dir: the moves' own sounds (audio/sound_mods.h)
     // The music player (issue #48, frontend/jukebox.h). --jukebox TRACK:FRAMES
     // plays a track on the player's own machine instead of running the game
     // (--wav keeps its sound); --jukebox-at FRAME:TRACK:FRAMES does it in the
@@ -732,6 +734,7 @@ int main(int argc, char** argv) {
         else if (a == "--dump-pwm-samples") pwm_dump_dir = next();
         else if (a == "--music-dir") music_dirs.push_back(next());
         else if (a == "--samples-dir") sample_dirs.push_back(next());
+        else if (a == "--sounds-dir") sound_dirs.push_back(next());
         else if (a == "--jukebox" || a == "--jukebox-at") {
             auto parts = split(next(), ':');
             const bool mid = a == "--jukebox-at";
@@ -946,6 +949,7 @@ int main(int argc, char** argv) {
         before(tile_dirs, mod_packs::folders(packs, mod_packs::kTextures));
         before(music_dirs, mod_packs::folders(packs, mod_packs::kMusic));
         before(sample_dirs, mod_packs::folders(packs, mod_packs::kSamples));
+        before(sound_dirs, mod_packs::folders(packs, mod_packs::kSounds));
     }
 
     auto m = std::make_unique<Machine>();
@@ -1142,6 +1146,14 @@ int main(int argc, char** argv) {
         samples.attach(*m);
         ref_samples = samples;
         if (ref) ref_samples.attach(*ref);
+    }
+    audio::SoundMods sounds;
+    if (!sound_dirs.empty()) {
+        int found = 0;
+        for (const auto& dir : sound_dirs) found = sounds.scan(dir);
+        std::printf("sounds: %d move sound(s) from %zu folder(s)\n", found, sound_dirs.size());
+        sounds.attach(*m);
+        if (ref) sounds.attach(*ref);
     }
     // The music player's track list and machine (issue #48).
     if (jukebox_list) {
@@ -1583,6 +1595,7 @@ int main(int argc, char** argv) {
         }
         if (!music_dirs.empty()) music.after_frame(*m, first_sample);
         if (!sample_dirs.empty()) samples.after_frame(*m, first_sample);
+        if (!sound_dirs.empty()) sounds.after_frame(*m, first_sample, 1.0f);
         if (m->wide_active) {
             ++wide_live_frames;
             if (!wide_was_live) { ++wide_stretches; wide_was_live = true; }

@@ -19,6 +19,7 @@ usage: test_md_sprite_text.py HEADLESS ROM
 import glob
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -124,6 +125,7 @@ class MdSpriteText(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.dir = tempfile.mkdtemp(prefix="chaotix_mdsprite_")
+        cls.addClassCleanup(shutil.rmtree, cls.dir, True)
         dump = os.path.join(cls.dir, "dump")
         run("--dump-graphics", dump)
         cls.dump = dump

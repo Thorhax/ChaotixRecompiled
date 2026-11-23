@@ -11,6 +11,7 @@ usage: test_tile_pack.py HEADLESS ROM
 """
 import glob
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,7 @@ def run(*args):
 class TilePack(unittest.TestCase):
     def test_a_pack_of_the_dumped_tiles_changes_nothing(self):
         d = tempfile.mkdtemp(prefix="chaotix_tiles_")
+        self.addCleanup(shutil.rmtree, d, True)
         dump, plain, packed = (os.path.join(d, n) for n in ("dump", "plain", "packed"))
         for p in (dump, plain, packed):
             os.makedirs(p)

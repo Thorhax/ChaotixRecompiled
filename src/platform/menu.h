@@ -81,6 +81,13 @@ public:
         std::function<void(int slot)> load_state;
         std::function<std::string(int slot)> state_info;
         std::function<std::string()> states_locked;
+        // This fork: a slot's picture (the game as it was saved) with its size,
+        // null without one; lines about it (when it was saved, which characters
+        // were on); and switching the character packs to the ones a slot was
+        // saved with, then starting the game again to load it.
+        std::function<SDL_Texture*(int slot, float* w, float* h)> state_preview;
+        std::function<std::vector<std::string>(int slot)> state_details;
+        std::function<void(int slot)> switch_state_packs;
         // Mod packs (issue #42, OPTIONS > EXTRAS > MODS): the list in the
         // player's order, which the page reorders and switches in place
         // (null: no mods here); a change made there, so the app can say
@@ -170,6 +177,10 @@ public:
     std::vector<std::pair<int, SDL_FRect>> drawn_rows() const;
     int selected_index() const { return selected_; }
     void close();
+    // This fork: a state that needs other character packs than the ones on.
+    // Opens a page saying which, offering to switch to them and start again
+    // (Hooks::switch_state_packs) or not.
+    void offer_state_switch(int slot, std::vector<std::string> lines);
 
     // Each returns true when the menu consumed the input.
     bool on_key(SDL_Keycode key);
@@ -230,7 +241,7 @@ private:
     // that no page runs off a phone's screen.
     enum class Page { Closed, Front, Main, Options, Video, Sound, Input, Extras, Controls, Keys, TimeAttack,
                       Achievements, Cheats, States, StateKeys, Lobby, Mods, ModInfo, Music, Speedrun, Tether, Netplay, LevelSelect,
-                      Characters };
+                      Characters, StateSwitch };
 
     struct Item {
         std::string label;
@@ -313,6 +324,7 @@ private:
     void draw_showcase(ui::Ui& g);
     void build_keys();
     void build_states();
+    void build_state_switch();
     void build_state_keys();
     void build_mods();
     void build_mod_info();
@@ -396,6 +408,8 @@ private:
     // Lines of text under the heading (the pack's description on its page),
     // wrapped to the panel when drawn.
     std::vector<std::string> info_lines_;
+    int switch_slot_ = 0;                    // StateSwitch: the slot, and what it says
+    std::vector<std::string> switch_lines_;
     std::vector<mod_packs::Pack>* packs() const { return hooks_.mod_packs ? hooks_.mod_packs() : nullptr; }
     // Rebuilds the page in place, keeping the selection.
     void refresh();

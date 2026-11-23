@@ -60,7 +60,10 @@ int load_sprite_pack(SpritePack& pack, const std::string& dir, std::vector<std::
                     int dx = 0, dy = 0;
                     if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
                     const auto fits = [&] { return frame <= 0xFF && dx >= -127 && dx <= 127 && dy >= -127 && dy <= 127; };
-                    if (std::sscanf(line, "ring %x %d %d", &frame, &dx, &dy) == 3 && fits()) {
+                    if (std::sscanf(line, "hide %x", &frame) == 1 && frame <= 0xFF) {
+                        pack.add_hand_hidden(int(hand_bank), int(frame));
+                        ++n;
+                    } else if (std::sscanf(line, "ring %x %d %d", &frame, &dx, &dy) == 3 && fits()) {
                         pack.add_ring_centre(int(hand_bank), int(frame), dx, dy);
                     } else if (std::sscanf(line, "at %x %d %d", &frame, &dx, &dy) == 3 && fits()) {
                         pack.add_ring_place(int(hand_bank), int(frame), dx, dy);
@@ -73,7 +76,7 @@ int load_sprite_pack(SpritePack& pack, const std::string& dir, std::vector<std::
                     }
                 }
                 std::fclose(f);
-                if (bad) say(name + ": " + std::to_string(bad) + " line(s) are not \"FRAME DX DY\", \"ring FRAME X Y\" or \"at FRAME X Y\"; ignored");
+                if (bad) say(name + ": " + std::to_string(bad) + " line(s) are not \"FRAME DX DY\", \"ring FRAME X Y\", \"at FRAME X Y\" or \"hide FRAME\"; ignored");
                 say(name + ": the hand moves with " + std::to_string(n) + " body frame(s)");
             }
             continue;
@@ -114,9 +117,12 @@ int load_sprite_pack(SpritePack& pack, const std::string& dir, std::vector<std::
         // the left and up as a sheet's cell can).
         if (std::FILE* f = std::fopen((e.path().u8string() + ".offset").c_str(), "r")) {
             int dx = 0, dy = 0;
+            char word[32] = {};
             if (std::fscanf(f, "%d %d", &dx, &dy) == 2 && dx >= -127 && dx <= 127 && dy >= -127 && dy <= 127) {
                 s.dx = dx;
                 s.dy = dy;
+                // Then optionally "keep_facing" (SpriteImage::keep_facing).
+                if (std::fscanf(f, "%31s", word) == 1 && std::string(word) == "keep_facing") s.keep_facing = true;
             } else {
                 say(name + ".offset: not two numbers from -127 to 127; ignored");
             }

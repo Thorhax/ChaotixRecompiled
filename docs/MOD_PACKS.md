@@ -26,6 +26,7 @@ Mods/
     Patches/                   *.ips, *.bps
     Touch/                     dpad.bmp, a.bmp, ...
     Samples/                   <NN>.wav (the music's PWM drums)
+    Sounds/                    the extra moves' own sounds (CHARACTER_MODS.md)
   FasterKnuckles/
     mod.ini
     Characters/knuckles.ini
