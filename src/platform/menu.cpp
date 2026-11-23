@@ -1460,6 +1460,12 @@ void Menu::build_netplay() {
     items_.push_back({"JOIN A GAME", {}, [this](int step) {
         if (step == 0 && hooks_.netplay_join) hooks_.netplay_join();
     }, "you are player 2, at the address below"});
+    items_.push_back({"THIS DEVICE",
+                      [this, c] {
+                          const std::string a = hooks_.netplay_local_address ? hooks_.netplay_local_address() : std::string();
+                          return a.empty() ? std::string("NO NETWORK") : a + ":" + std::to_string(c->netplay_port);
+                      },
+                      [](int) {}, "the address a friend joins when you host", /*read_only=*/true});
     items_.push_back({"ADDRESS",
                       [this, c] {
                           if (editing_ == &c->netplay_address) return upper(c->netplay_address) + "_";
@@ -1516,6 +1522,15 @@ void Menu::end_edit(bool keep) {
         return;
     }
     if (edit_done_) edit_done_();
+}
+
+void Menu::finish_edit(const std::string& text, bool ok) {
+    if (!editing_) return;
+    if (ok) {
+        editing_->clear();
+        on_text(text.c_str());  // (the characters the row takes, up to its length)
+    }
+    end_edit(ok);
 }
 
 bool Menu::on_text(const char* text) {

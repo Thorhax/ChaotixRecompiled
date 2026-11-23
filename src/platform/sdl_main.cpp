@@ -381,6 +381,7 @@ struct App {
         bool own_handed_over = false;
     } net;
     bool text_input_on = false;   // the system's text input, for a text row of the menu
+    bool keyboard_failed = false; // the Switch's keyboard would not open for this text row
     // --netplay-host PORT / --netplay-join ADDRESS: a session started as soon
     // as the game is up, as HOST / JOIN on the NETPLAY page would.
     int cli_net_host = -1;
@@ -579,6 +580,42 @@ void warn_about_dead_bindings(const App& app) {
 uint16_t gamepad_buttons(SDL_Gamepad* g, const std::map<std::string, std::string>& binds) {
     return pad_input::mega_drive_buttons(g, binds);
 }
+
+#if defined(__SWITCH__)
+// The console's keyboard for the menu's text row being typed into: a number
+// pad for digits (the port), and with "." and ":" beside it for an address;
+// the full keyboard for anything else. It takes the screen until it is
+// closed; its text goes into the row (OK), or the old text stays (cancel).
+void switch_keyboard(App& app) {
+    const std::string allowed = app.menu.edit_allowed();
+    const bool digits = allowed.find_first_not_of("0123456789") == std::string::npos;
+    const bool address = !digits && allowed.find('.') != std::string::npos && allowed.find(':') != std::string::npos;
+    SwkbdConfig kbd;
+    char out[128] = {};
+    bool ok = false;
+    if (R_FAILED(swkbdCreate(&kbd, 0))) {
+        app.keyboard_failed = true;
+        return;
+    }
+    {
+        swkbdConfigMakePresetDefault(&kbd);
+        if (digits || address) swkbdConfigSetType(&kbd, SwkbdType_NumPad);
+        if (address) {
+            swkbdConfigSetLeftOptionalSymbolKey(&kbd, ".");
+            swkbdConfigSetRightOptionalSymbolKey(&kbd, ":");
+            swkbdConfigSetHeaderText(&kbd, "The host's address");
+            swkbdConfigSetGuideText(&kbd, "192.168.1.20 or 192.168.1.20:7845");
+        } else if (digits) {
+            swkbdConfigSetHeaderText(&kbd, "The port");
+        }
+        swkbdConfigSetInitialText(&kbd, app.menu.edit_text().c_str());
+        swkbdConfigSetStringLenMax(&kbd, u32(std::min<size_t>(app.menu.edit_max(), sizeof out - 1)));
+        ok = R_SUCCEEDED(swkbdShow(&kbd, out, sizeof out));
+        swkbdClose(&kbd);
+    }
+    app.menu.finish_edit(out, ok);
+}
+#endif
 
 // A gamepad joins the ones the game reads (once: opening one that is open
 // gives the same handle, and takes a reference that is given back).
@@ -3070,6 +3107,17 @@ int main(int argc, char** argv) {
         hooks.netplay_join = [&app] { if (app.m) netplay_begin(app, false); };
         hooks.netplay_leave = [&app] { if (app.m) netplay_leave(app); };
         hooks.netplay_status = [&app] { return netplay_status(app); };
+        // Asked of the system at most every few seconds (the page asks every frame).
+        hooks.netplay_local_address = [] {
+            static std::string address;
+            static Uint64 asked = 0;
+            const Uint64 now = SDL_GetTicks();
+            if (asked == 0 || now - asked > 3000) {
+                address = net::UdpSocket::local_address();
+                asked = now;
+            }
+            return address;
+        };
         hooks.netplay_active = [&app] { return app.net.on; };
         hooks.music_status = [&app] { return app.jukebox.status(); };
         hooks.music_keys = [&app]() -> const jukebox::Keys* {
@@ -3339,6 +3387,13 @@ int main(int argc, char** argv) {
         // A text row of the menu being typed into (the NETPLAY address): the
         // system's text input on, which brings up the on-screen keyboard on
         // a phone.
+#if defined(__SWITCH__)
+        // On the Switch, the console's own keyboard at once: an address is
+        // slow to type with the d-pad. Where it cannot open (started from
+        // the album), the d-pad types as before.
+        if (!app.menu.editing_text()) app.keyboard_failed = false;
+        else if (!app.keyboard_failed) switch_keyboard(app);
+#endif
         if (app.menu.editing_text() != app.text_input_on) {
             app.text_input_on = app.menu.editing_text();
             if (app.text_input_on) SDL_StartTextInput(app.window);

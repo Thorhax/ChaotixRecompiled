@@ -234,6 +234,37 @@ std::string UdpSocket::describe(const Endpoint& e) const {
     return std::string(host) + ":" + std::to_string(port);
 }
 
+std::string UdpSocket::local_address() {
+    if (!startup()) return "";
+#ifdef _WIN32
+    const SOCKET s = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCKET) return "";
+    const intptr_t fd = intptr_t(s);
+#else
+    const int s = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s < 0) return "";
+    const intptr_t fd = s;
+#endif
+    // A documentation address (TEST-NET-1): only the route to it is looked
+    // up, and that route's source address is this device's.
+    sockaddr_in to{};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(9);
+    to.sin_addr.s_addr = htonl(0xC0000201u);  // 192.0.2.1
+    std::string out;
+    if (::connect(s, reinterpret_cast<const sockaddr*>(&to), sizeof to) == 0) {
+        sockaddr_in me{};
+        socklen_t len = sizeof me;
+        if (::getsockname(s, reinterpret_cast<sockaddr*>(&me), &len) == 0 && me.sin_addr.s_addr != 0) {
+            const uint32_t a = ntohl(me.sin_addr.s_addr);
+            out = std::to_string(a >> 24) + "." + std::to_string((a >> 16) & 255) + "." + std::to_string((a >> 8) & 255) +
+                  "." + std::to_string(a & 255);
+        }
+    }
+    close_fd(fd);
+    return out;
+}
+
 bool UdpSocket::resolve(const std::string& text_in, uint16_t default_port, Endpoint& out, std::string* error) {
     if (!startup()) {
         if (error) *error = "the network is not available";

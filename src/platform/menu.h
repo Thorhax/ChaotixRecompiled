@@ -125,6 +125,9 @@ public:
         std::function<void()> netplay_join;
         std::function<void()> netplay_leave;
         std::function<std::string()> netplay_status;
+        // This fork: this device's address on its network ("" if none), to
+        // give a friend who joins.
+        std::function<std::string()> netplay_local_address;
         std::function<bool()> netplay_active;
         // TIME ATTACK and LEVEL SELECT's zone showcase (issue #53): a picture
         // of the stage asked for at its time of day (only the place, level
@@ -197,6 +200,13 @@ public:
     // right adds one; Enter or the pad's confirm button keeps the text,
     // Escape or its back button puts the old one back.
     bool editing_text() const { return editing_ != nullptr; }
+    // This fork: the row's text, the characters it takes and how many, for a
+    // system keyboard that edits the whole text at once (the Switch's), and
+    // the edit finished with that keyboard's text (ok) or given up.
+    std::string edit_text() const { return editing_ ? *editing_ : std::string(); }
+    const char* edit_allowed() const { return edit_allowed_; }
+    size_t edit_max() const { return edit_max_; }
+    void finish_edit(const std::string& text, bool ok);
     bool on_text(const char* text);
 
     void draw(ui::Ui& g, achievements::Tracker& ach);

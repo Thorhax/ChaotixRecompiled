@@ -35,6 +35,12 @@ public:
     // resolve.
     static bool resolve(const std::string& text, uint16_t default_port, Endpoint& out, std::string* error);
 
+    // This fork: the address this device has on its network (IPv4, as
+    // "192.168.1.20"), the one a friend on the same network joins; "" if
+    // there is none. Asked of the system by "connecting" a UDP socket, which
+    // sends nothing.
+    static std::string local_address();
+
 private:
     intptr_t fd_ = -1;
     int family_ = 0;

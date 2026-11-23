@@ -50,7 +50,8 @@ session ends.
 | --- | --- |
 | HOST A GAME | wait for a player on PORT (you are player 1) |
 | JOIN A GAME | join the host at ADDRESS (you are player 2) |
-| ADDRESS | the host's `address:port`. Press it and type; Enter keeps it, Escape puts the old one back. With a pad: up/down change the last character, right adds one, left deletes one, A keeps it. On a phone the on-screen keyboard comes up. |
+| THIS DEVICE | this device's address on its network and the PORT, which the other player types when you host (this fork; "NO NETWORK" without one) |
+| ADDRESS | the host's `address:port`. Press it and type; Enter keeps it, Escape puts the old one back. With a pad: up/down change the last character, right adds one, left deletes one, A keeps it. On a phone the on-screen keyboard comes up; on the Switch the console's keyboard does at once (a number pad with `.` and `:`; this fork). |
 | PORT | the UDP port to host on (type it, or left/right) |
 | INPUT DELAY | 0-4 frames (2 to begin with); see below. Used by the next session. |
 | STATUS | WAITING FOR PLAYER 2, RECEIVING THE GAME 40%, or `PLAYER 1 - PING 48 MS - ROLLBACK 2` while playing |
@@ -76,7 +77,7 @@ may use different delays.
 There is no matchmaking server and no NAT traversal in this version: the
 joining player must be able to reach the host's UDP port.
 
-- **Same LAN**: join the host's LAN address (`ipconfig` / `ip addr` shows it).
+- **Same LAN**: join the host's LAN address (THIS DEVICE on the host's NETPLAY page, or `ipconfig` / `ip addr`).
 - **Over the Internet, simplest**: a mesh VPN such as
   [Tailscale](https://tailscale.com) or [ZeroTier](https://www.zerotier.com).
   Both players join the same network; the joiner uses the host's VPN address
